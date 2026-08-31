@@ -1,0 +1,55 @@
+<idea-plugin>
+    <id>io.github.bovmelo.cph</id>
+    <name>CPH</name>
+    <vendor>Bovmelo</vendor>
+
+    <description><![CDATA[
+        <p>A native Competitive Programming Helper for JetBrains IDEs.</p>
+        <p>Import problems with Competitive Companion, manage test cases, and compile, run, and judge solutions without leaving the IDE.</p>
+        <ul>
+            <li>Kotlin-first support plus the full CPH language matrix.</li>
+            <li>Timeouts, cancellation, output differences, and Python custom checkers.</li>
+            <li>Portable testcase JSON and CPH-compatible metadata.</li>
+            <li>cph-submit and confirmed Kattis submission integration.</li>
+        </ul>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <p>0.1.1 fixes source-document saving on IntelliJ Platform 2025+ and flushes pending testcase edits before a run.</p>
+        <p>0.1.0 introduced the complete local judging and Competitive Companion workflow.</p>
+    ]]></change-notes>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow
+                id="CPH"
+                anchor="right"
+                icon="/icons/cphToolWindow.svg"
+                factoryClass="io.github.bovmelo.cph.ui.CphToolWindowFactory"/>
+        <postStartupActivity implementation="io.github.bovmelo.cph.startup.CphProjectActivity"/>
+        <applicationConfigurable
+                id="io.github.bovmelo.cph.settings"
+                displayName="CPH"
+                instance="io.github.bovmelo.cph.settings.CphSettingsConfigurable"/>
+        <notificationGroup id="CPH Notifications" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <action
+                id="io.github.bovmelo.cph.RunAll"
+                class="io.github.bovmelo.cph.actions.RunAllAction"
+                text="Run CPH Testcases"
+                description="Create local testcases for the active solution, or compile and run the saved testcases">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt B"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action
+                id="io.github.bovmelo.cph.Stop"
+                class="io.github.bovmelo.cph.actions.StopAction"
+                text="Stop CPH Run"
+                description="Stop the currently running CPH process">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

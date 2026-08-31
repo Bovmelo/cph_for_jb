@@ -1,0 +1,19 @@
+.gradle/
+.kotlin/
+.intellijPlatform/
+.idea/
+*.iml
+build/
+out/
+
+# Local competitive-programming state and generated artifacts
+.cph/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+*.bin
+*.exe
+
+# Local configuration and operating-system files
+local.properties
+.DS_Store
