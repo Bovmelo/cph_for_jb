@@ -179,12 +179,16 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
                 }
                 callbacks.onPhase(RunPhase.RUNNING, "Running testcase ${index + 1} of ${cases.size}...")
                 callbacks.onResult(testCase.result(Verdict.RUNNING))
-                val processResult = processRunner.run(
-                    plan.run,
-                    testCase.input,
-                    settings.timeoutMs,
-                    run::isCancellationRequested,
-                )
+                val inputFile = testCase.inputFile.trim().takeIf(String::isNotEmpty)?.let { Path.of(it) }
+                if (inputFile != null && !Files.isRegularFile(inputFile)) {
+                    callbacks.onResult(testCase.result(Verdict.RUNTIME_ERROR, stderr = "Input file not found: $inputFile"))
+                    continue
+                }
+                val processResult = if (inputFile != null) {
+                    processRunner.runWithInputFile(plan.run, inputFile, settings.timeoutMs, run::isCancellationRequested)
+                } else {
+                    processRunner.run(plan.run, testCase.input, settings.timeoutMs, run::isCancellationRequested)
+                }
                 val preliminaryVerdict = processVerdict(processResult, settings)
                 val judged = if (preliminaryVerdict == null && problem.customCheckerPath.isNullOrBlank().not()) {
                     callbacks.onPhase(RunPhase.CHECKING, "Checking testcase ${index + 1} of ${cases.size}...")
@@ -239,11 +243,14 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         var inputPath: Path? = null
         var outputPath: Path? = null
         return try {
-            val createdInputPath = Files.createTempFile("cph-input-", ".txt")
             val createdOutputPath = Files.createTempFile("cph-output-", ".txt")
-            inputPath = createdInputPath
             outputPath = createdOutputPath
-            Files.writeString(createdInputPath, testCase.input, StandardCharsets.UTF_8)
+            // A user-chosen input file is handed to the checker as is and must never be deleted here.
+            val createdInputPath = testCase.inputFile.trim().takeIf(String::isNotEmpty)?.let { Path.of(it) }
+                ?: Files.createTempFile("cph-input-", ".txt").also {
+                    inputPath = it
+                    Files.writeString(it, testCase.input, StandardCharsets.UTF_8)
+                }
             Files.writeString(createdOutputPath, processResult.stdout, StandardCharsets.UTF_8)
             val python = settings.toolchain(LanguageId.PYTHON).runCommand
             val checkerResult = if (python.isBlank()) {

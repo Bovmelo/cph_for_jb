@@ -17,3 +17,8 @@ out/
 # Local configuration and operating-system files
 local.properties
 .DS_Store
+
+# Local AI assistant state
+.mimocode/
+.claude/
+.codex/

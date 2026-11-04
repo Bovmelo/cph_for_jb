@@ -14,7 +14,7 @@ data class CphSettingsSnapshot(
     val defaultLanguage: LanguageId = LanguageId.KOTLIN,
     val timeoutMs: Long = 3_000,
     val compileTimeoutMs: Long = 60_000,
-    val failOnStderr: Boolean = true,
+    val failOnStderr: Boolean = false,
     val onlineJudge: Boolean = false,
     val optimizeO2: Boolean = true,
     val sanitizers: Boolean = false,

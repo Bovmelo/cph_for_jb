@@ -149,10 +149,28 @@ class JudgeEngineTest {
                 sourcePath = source.toString(),
             )
 
-            engine.run(engine.prepareRun(), problem, null, CphSettingsSnapshot(), callbacks)
+            engine.run(engine.prepareRun(), problem, null, CphSettingsSnapshot(failOnStderr = true), callbacks)
 
             assertEquals(listOf(expectedVerdict), callbacks.finalVerdicts())
         }
+    }
+
+    @Test
+    fun `stderr output alone does not fail a testcase by default`() {
+        val source = temporaryDirectory.resolve("stderr-default.py")
+        Files.writeString(source, "print('expected')")
+        val callbacks = RecordingCallbacks()
+        val engine = JudgeEngine(SingleResultExecutor(ProcessResult("expected\n", "debug", 0, 1)))
+        val problem = Problem(
+            name = "Stderr",
+            url = "file:///stderr",
+            tests = listOf(TestCase(output = "expected\n", id = 1)),
+            sourcePath = source.toString(),
+        )
+
+        engine.run(engine.prepareRun(), problem, null, CphSettingsSnapshot(), callbacks)
+
+        assertEquals(listOf(Verdict.ACCEPTED), callbacks.finalVerdicts())
     }
 
     @Test

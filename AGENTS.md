@@ -7,7 +7,6 @@ These instructions apply to the entire repository.
 ## Repository status
 
 - This repository contains a Kotlin IntelliJ Platform plugin named CPH for JetBrains.
-- `JetBrains黑客松参赛指南.pdf` is reference material. Treat it as read-only unless a task explicitly asks to replace or edit it.
 - The plugin recreates the Competitive Programming Helper workflow with native JetBrains UI and Competitive Companion protocol compatibility.
 - Production code is Kotlin. Gradle Kotlin DSL and the IntelliJ Platform Gradle Plugin are the canonical build system.
 - The plugin targets IntelliJ Platform 2025.2 or newer and emits JVM 21 bytecode. A newer local JDK may be used to run Gradle.

@@ -157,6 +157,17 @@ class CphProjectService(
         }
     }
 
+    fun setTestCaseInputFile(id: Long, path: String) {
+        val normalized = path.trim()
+        mutateProblem(publish = true) { problem ->
+            problem.copy(
+                tests = problem.tests.map { testCase ->
+                    if (testCase.id == id) testCase.copy(inputFile = normalized) else testCase
+                },
+            )
+        }
+    }
+
     /** Copies the stdout of the last run into the expected output and marks that run as accepted. */
     fun setExpectedFromResult(id: Long) {
         val updated = synchronized(stateLock) {

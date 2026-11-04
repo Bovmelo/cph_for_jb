@@ -67,7 +67,7 @@ class CphSettings : PersistentStateComponent<CphSettings.StoredState> {
         var defaultLanguage: String = LanguageId.KOTLIN.settingValue
         var timeoutMs: Long = 3_000
         var compileTimeoutMs: Long = 60_000
-        var failOnStderr: Boolean = true
+        var failOnStderr: Boolean = false
         var onlineJudge: Boolean = false
         var optimizeO2: Boolean = true
         var sanitizers: Boolean = false

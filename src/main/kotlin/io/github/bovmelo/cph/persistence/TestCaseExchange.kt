@@ -35,6 +35,9 @@ object TestCaseExchange {
     fun encode(testCases: List<TestCase>): String {
         require(testCases.isNotEmpty()) { "At least one testcase is required." }
         require(testCases.size <= MAX_TEST_CASES) { "At most $MAX_TEST_CASES testcases can be exported." }
+        require(testCases.none { it.inputFile.isNotBlank() }) {
+            "Testcases that use an input file cannot be exported as JSON."
+        }
         val portable = testCases.map { PortableTestCase(it.input, it.output) }
         return CphJson.format.encodeToString(portable) + "\n"
     }

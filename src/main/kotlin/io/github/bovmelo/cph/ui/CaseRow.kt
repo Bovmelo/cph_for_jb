@@ -44,6 +44,9 @@ internal class CaseCallbacks(
     val onRun: (id: Long) -> Unit,
     val onDelete: (id: Long) -> Unit,
     val onSetExpected: (id: Long) -> Unit,
+    /** Asks the user for an input file and returns its path, or null when cancelled. */
+    val onChooseInputFile: () -> String?,
+    val onSetInputFile: (id: Long, path: String) -> Unit,
     val onExpandedChanged: (id: Long, expanded: Boolean) -> Unit,
 )
 
@@ -76,7 +79,27 @@ internal class CaseRow(
     private val checker = DataArea(editable = false, emptyText = "")
     private val useOutput = ActionLink("Use this output as expected") { callbacks.onSetExpected(id) }
 
-    private val inputSection = section("Input", input)
+    private val chooseInput = ActionLink("Choose file…") {
+        callbacks.onChooseInputFile()?.let { callbacks.onSetInputFile(id, it) }
+    }
+    private val clearInputFile = ActionLink("Use text") { callbacks.onSetInputFile(id, "") }
+    private val inputFileLabel = JBLabel().apply { font = CphTheme.dataFont() }
+    private val inputFilePanel = JPanel(BorderLayout()).apply {
+        border = JBUI.Borders.compound(JBUI.Borders.customLine(CphTheme.divider, 1), JBUI.Borders.empty(4, 6))
+        add(inputFileLabel, BorderLayout.CENTER)
+    }
+    private val inputLinks = JPanel(FlowLayout(FlowLayout.RIGHT, JBUI.scale(8), 0)).apply {
+        isOpaque = false
+        add(clearInputFile)
+        add(chooseInput)
+    }
+    private val inputBody = JPanel(BorderLayout()).apply {
+        isOpaque = false
+        add(input, BorderLayout.NORTH)
+        add(inputFilePanel, BorderLayout.CENTER)
+    }
+
+    private val inputSection = section("Input", inputBody, inputLinks)
     private val expectedSection = section("Expected", expected, useOutput)
     private val outputSection = section("Output", output)
     private val errorSection = section("Standard error", errors)
@@ -197,6 +220,20 @@ internal class CaseRow(
             suppressEdits = false
         }
         input.area.isEditable = newModel.idle
+        val inputFile = testCase.inputFile.trim()
+        val usesFile = inputFile.isNotEmpty()
+        input.isVisible = !usesFile
+        inputFilePanel.isVisible = usesFile
+        clearInputFile.isVisible = usesFile
+        chooseInput.text = if (usesFile) "Change file…" else "Choose file…"
+        chooseInput.isEnabled = newModel.idle
+        clearInputFile.isEnabled = newModel.idle
+        if (usesFile) {
+            val missing = !runCatching { java.nio.file.Files.isRegularFile(java.nio.file.Path.of(inputFile)) }.getOrDefault(false)
+            inputFileLabel.text = if (missing) "$inputFile (not found)" else inputFile
+            inputFileLabel.toolTipText = inputFile
+            inputFileLabel.foreground = if (missing) CphTheme.color(VerdictTone.FAIL) else null
+        }
         expected.area.isEditable = newModel.idle
 
         val finished = result != null && verdict != Verdict.PENDING && verdict != Verdict.RUNNING
@@ -232,7 +269,7 @@ internal class CaseRow(
         })
     }
 
-    private fun section(label: String, area: DataArea, trailing: JComponent? = null): JPanel =
+    private fun section(label: String, content: JComponent, trailing: JComponent? = null): JPanel =
         JPanel(BorderLayout(0, JBUI.scale(2))).apply {
             isOpaque = false
             add(
@@ -246,7 +283,7 @@ internal class CaseRow(
                 },
                 BorderLayout.NORTH,
             )
-            add(area, BorderLayout.CENTER)
+            add(content, BorderLayout.CENTER)
         }
 
     /** Header row with a hover wash and a thin verdict-coloured bar on its leading edge. */

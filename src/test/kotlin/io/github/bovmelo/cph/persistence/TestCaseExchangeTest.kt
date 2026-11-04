@@ -31,6 +31,13 @@ class TestCaseExchangeTest {
     }
 
     @Test
+    fun `refuses to export testcases backed by an input file`() {
+        assertFailsWith<IllegalArgumentException> {
+            TestCaseExchange.encode(listOf(TestCase(inputFile = "/data/big.txt", output = "1\n")))
+        }
+    }
+
+    @Test
     fun `rejects malformed and empty imports with a useful boundary`() {
         assertFailsWith<IllegalArgumentException> { TestCaseExchange.decode("{}") }
         assertFailsWith<IllegalArgumentException> { TestCaseExchange.decode("[]") }

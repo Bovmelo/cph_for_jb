@@ -1,6 +1,6 @@
 # CPH for JetBrains
 
-CPH for JetBrains 是使用 Kotlin 编写的 IntelliJ Platform 插件。它以 JetBrains 原生工具窗口复现 [Competitive Programming Helper](https://marketplace.visualstudio.com/items?itemName=DivyanshuAgrawal.competitive-programming-helper) 的竞赛工作流，并兼容 Competitive Companion 与 cph-submit 协议。
+CPH for JetBrains 是使用 Kotlin 编写的 IntelliJ Platform 插件。它以 JetBrains 原生工具窗口复现 [Competitive Programming Helper](https://marketplace.visualstudio.com/items?itemName=DivyanshuAgrawal.competitive-programming-helper) 的竞赛工作流，并兼容 Competitive Companion 协议。
 
 Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform，不依赖某个产品的语言插件；编译和运行均通过参数数组调用本机工具链，因此可用于 IntelliJ IDEA、CLion、PyCharm 等基于 2025.2 或更新平台的产品。
 
@@ -14,13 +14,12 @@ Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform�
 - 按 CPH 规则忽略每行首尾空白，并展示逐行输出差异。
 - 每个用例同时显示耗时和峰值内存（Linux 读取 `VmHWM`，macOS 读取 `proc_pid_rusage` 的峰值物理内存，Windows 读取 `PeakWorkingSetSize`；读取失败时只显示耗时）。注意 JVM 语言的内存包含 JVM 自身的基础开销。
 - 判题结果为 Wrong Answer 时可点击 **Set Expected**，把本次输出直接设为预期输出。
+- 用例的 Input 可以改为选择一个文件：界面只显示文件路径，运行时以流的方式交给程序的 stdin，不读入内存，也没有大小限制。使用输入文件的用例不能导出为 JSON。
 - 每个用例可单独启用/禁用：禁用的用例会被 Run Testcases 跳过，但仍可单独运行。
 - 对拍（Stress Test）：选择生成器和暴力解，自动循环比对；发现差异后，把触发用例（输入 + 暴力解输出）加入用例列表。
 - 支持 Python 自定义 checker（Special Judge）。checker 通过临时输入/输出文件获得数据，并用退出码决定结果。
 - 编辑器切换时自动加载已有用例；`Ctrl+Alt+B` 可创建本地题目或运行当前源码。
 - 所有编译器、解释器、额外参数、时限、模板、导入目录和 `ONLINE_JUDGE` 均可配置。
-
-插件不复刻上游的遥测、在线人数和界面彩蛋，因为它们不属于竞赛工作流。
 
 ## 快速开始
 
@@ -112,5 +111,3 @@ python3 checker.py <input-file> <actual-output-file>
 ```
 
 逐功能的自动化边界、真实进程测试和手工验收步骤见 [docs/VERIFICATION.md](docs/VERIFICATION.md)。
-
-仓库中的 `JetBrains黑客松参赛指南.pdf` 仅作为背景参考，不是产品规范，也不会被构建或修改。

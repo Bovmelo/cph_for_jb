@@ -6,7 +6,10 @@ import com.intellij.execution.process.OSProcessHandler
 import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.process.ProcessOutputTypes
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -31,6 +34,14 @@ interface ProcessExecutor {
         cancellationRequested: () -> Boolean,
     ): ProcessResult
 
+    /** Streams [inputFile] to stdin. The default reads it whole, which is only suitable for fakes. */
+    fun runWithInputFile(
+        command: CommandSpec,
+        inputFile: Path,
+        timeoutMs: Long,
+        cancellationRequested: () -> Boolean,
+    ): ProcessResult = run(command, Files.readString(inputFile, StandardCharsets.UTF_8), timeoutMs, cancellationRequested)
+
     fun cancel()
 }
 
@@ -44,6 +55,22 @@ class ProcessRunner(
         stdin: String,
         timeoutMs: Long,
         cancellationRequested: () -> Boolean,
+    ): ProcessResult = execute(command, timeoutMs, cancellationRequested) { it.write(stdin.toByteArray(StandardCharsets.UTF_8)) }
+
+    override fun runWithInputFile(
+        command: CommandSpec,
+        inputFile: Path,
+        timeoutMs: Long,
+        cancellationRequested: () -> Boolean,
+    ): ProcessResult = execute(command, timeoutMs, cancellationRequested) { output ->
+        Files.newInputStream(inputFile).use { it.copyTo(output) }
+    }
+
+    private fun execute(
+        command: CommandSpec,
+        timeoutMs: Long,
+        cancellationRequested: () -> Boolean,
+        writeStdin: (OutputStream) -> Unit,
     ): ProcessResult {
         val stdout = StringBuffer()
         val stderr = StringBuffer()
@@ -98,10 +125,12 @@ class ProcessRunner(
             if (cancellationRequested()) {
                 handler.destroyProcess()
             } else {
-                runCatching {
-                    handler.processInput?.bufferedWriter(StandardCharsets.UTF_8)?.use { writer ->
-                        writer.write(stdin)
-                        writer.flush()
+                // Written off-thread so a program that never reads stdin cannot defeat the timeout.
+                val input = handler.processInput
+                if (input != null) {
+                    Thread({ runCatching { input.use(writeStdin) } }, "cph-stdin").apply {
+                        isDaemon = true
+                        start()
                     }
                 }
             }

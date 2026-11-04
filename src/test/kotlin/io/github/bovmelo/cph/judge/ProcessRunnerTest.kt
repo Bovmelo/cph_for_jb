@@ -71,6 +71,19 @@ class ProcessRunnerTest {
     }
 
     @Test
+    fun `streams an input file larger than 2 MiB to stdin`() {
+        val file = temporaryDirectory.resolve("big-input.txt")
+        val content = "0123456789abcdef\n".repeat(200_000)
+        Files.writeString(file, content)
+
+        val result = ProcessRunner().runWithInputFile(command("echo"), file, 10_000) { false }
+
+        assertTrue(content.length > 2 * 1024 * 1024)
+        assertEquals(content.length, result.stdout.length)
+        assertEquals(0, result.exitCode)
+    }
+
+    @Test
     fun `reports timeout launch error exit status and output limit`() {
         val timeout = ProcessRunner().run(command("sleep"), "", 100) { false }
         val failure = ProcessRunner().run(command("fail"), "", 5_000) { false }

@@ -26,6 +26,8 @@ data class TestCase(
     val input: String = "",
     val output: String = "",
     val id: Long = TestCaseIds.next(),
+    // When set, the file is streamed to stdin and `input` is ignored; it is never read into memory.
+    val inputFile: String = "",
     // Disabled cases are skipped by Run Testcases but still run when selected individually.
     val enabled: Boolean = true,
 )

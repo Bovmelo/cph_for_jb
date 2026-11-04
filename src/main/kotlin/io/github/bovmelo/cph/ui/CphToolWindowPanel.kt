@@ -130,6 +130,8 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
         },
         onDelete = { id -> service.deleteTestCase(id) },
         onSetExpected = { id -> service.setExpectedFromResult(id) },
+        onChooseInputFile = ::chooseInputFile,
+        onSetInputFile = { id, path -> service.setTestCaseInputFile(id, path) },
         onExpandedChanged = { id, expanded -> if (expanded) expandedIds += id else expandedIds -= id },
     )
 
@@ -251,7 +253,6 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             if (on) chooseCheckerFile() else service.setCustomCheckerPath("")
         }.enabledWhen { hasProblem() && isIdle() },
         Separator.getInstance(),
-        Separator.getInstance(),
         action("Clear all testcases…", null, null) { confirmClearCases() }
             .enabledWhen { hasProblem() && isIdle() },
         action("Reset problem…", null, null) { confirmResetProblem() }
@@ -367,7 +368,7 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             val row = rows.getOrPut(testCase.id) { CaseRow(testCase.id, caseCallbacks) }
             if (isNew) {
                 // Blank cases are waiting for input; a case added after load is one the user just asked for.
-                if (!firstRender || (testCase.input.isBlank() && testCase.output.isBlank())) {
+                if (!firstRender || (testCase.input.isBlank() && testCase.inputFile.isBlank() && testCase.output.isBlank())) {
                     expandedIds += testCase.id
                 }
             }
@@ -441,6 +442,13 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             Messages.NO -> service.importTestCases(Path.of(selected.path), replaceExisting = false)
         }
     }
+
+    private fun chooseInputFile(): String? = FileChooser.chooseFile(
+        FileChooserDescriptorFactory.createSingleFileDescriptor().withTitle("Choose Input File"),
+        this,
+        project,
+        initialVirtualFile(),
+    )?.path
 
     private fun chooseExportFile() {
         val descriptor = FileSaverDescriptor(
