@@ -48,5 +48,6 @@ These instructions apply to the entire repository.
 - `LanguageExecutionIntegrationTest` runs installed external toolchains and skips unavailable ones; set `CPH_TEST_<LANGUAGE>_COMPILER` or `CPH_TEST_<LANGUAGE>_RUNNER` to verify a tool outside `PATH`.
 - IntelliJ application-level JUnit 5 tests use `TestFrameworkType.Platform` and `TestFrameworkType.JUnit5`; keep platform fixtures out of tests for pure model, persistence, command, and judging logic.
 - If no automated check exists for a change, perform a suitable manual validation and state that limitation clearly.
+- Gradle's build cache (`org.gradle.caching`) can restore stale `compileTestKotlin` output after a main-source constructor signature change, which surfaces as `NoSuchMethodError` in tests; rerun with `./gradlew cleanCompileTestKotlin test --no-build-cache` (`--rerun` alone only reruns the test task, not the stale compile).
 - Never claim a command passed unless it was actually run successfully.
 - Update this file when the repository gains concrete build, test, formatting, or architectural conventions.

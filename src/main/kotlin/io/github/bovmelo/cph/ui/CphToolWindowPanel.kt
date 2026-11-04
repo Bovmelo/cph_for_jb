@@ -1,238 +1,427 @@
 package io.github.bovmelo.cph.ui
 
+import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
+import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileChooser.FileChooserFactory
 import com.intellij.openapi.fileChooser.FileSaverDescriptor
 import com.intellij.openapi.options.ShowSettingsUtil
+import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.ui.DocumentAdapter
-import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.ActionLink
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.ui.components.JBTextArea
-import com.intellij.ui.components.JBTextField
+import com.intellij.ui.components.panels.VerticalLayout
+import com.intellij.util.ui.AsyncProcessIcon
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import io.github.bovmelo.cph.model.CphUiState
+import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.model.RunPhase
-import io.github.bovmelo.cph.model.TestCase
-import io.github.bovmelo.cph.model.TestRunResult
 import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.project.CphProjectService
 import io.github.bovmelo.cph.submission.isCodeforcesUrl
 import io.github.bovmelo.cph.submission.isKattisUrl
 import java.awt.BorderLayout
-import java.awt.Color
+import java.awt.CardLayout
 import java.awt.Dimension
 import java.awt.FlowLayout
-import java.awt.Font
-import java.awt.GridLayout
-import java.awt.event.FocusAdapter
-import java.awt.event.FocusEvent
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
+import java.awt.Rectangle
 import java.nio.file.Path
-import javax.swing.BorderFactory
-import javax.swing.Box
-import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.ScrollPaneConstants
-import javax.swing.Timer
-import javax.swing.event.DocumentEvent
+import javax.swing.SwingUtilities
 
+/**
+ * The CPH tool window. Everything the contestant needs while solving sits in three layers:
+ * a control row, a result strip that shows the whole run at once, and a list of testcases.
+ * Rare actions live in the overflow menu instead of competing for space.
+ */
 class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
     private val service = project.service<CphProjectService>()
-    private val contentPanel = JPanel()
-    private val statusLabel = JBLabel()
-    private val runTestCasesButton = JButton("Run Testcases")
-    private val stopButton = JButton("Stop")
-    private val addButton = JButton("Add Case")
-    private val importButton = JButton("Import JSON")
-    private val exportButton = JButton("Export JSON")
-    private val clearButton = JButton("Clear Cases")
-    private val resetButton = JButton("Reset Problem")
-    private val openUrlButton = JButton("Open Problem")
-    private val submitCodeforcesButton = JButton("Submit CF")
-    private val submitKattisButton = JButton("Submit Kattis")
-    private val settingsButton = JButton("Settings")
-    private val onlineJudgeEnabled = JBCheckBox("ONLINE_JUDGE")
-    private val checkerEnabled = JBCheckBox("Custom checker")
-    private val checkerPath = JBTextField()
-    private val checkerBrowseButton = JButton("Browse...")
-    private val testCasePanels = mutableListOf<TestCasePanel>()
-    private var rendering = false
+
+    private val runButton = object : JButton("Run", AllIcons.Actions.Execute) {
+        override fun isDefaultButton(): Boolean = true
+    }.apply { toolTipText = "Run the enabled testcases (Ctrl+Alt+B)" }
+
+    private val titleLabel = JBLabel().apply { font = JBFont.label().asBold().biggerOn(1f) }
+    private val groupLabel = JBLabel().apply {
+        font = JBFont.small()
+        foreground = CphTheme.secondaryText
+    }
+    private val timeChip = Chip("", AllIcons.Actions.ProfileCPU)
+    private val memoryChip = Chip("")
+    private val checkerChip = Chip("", AllIcons.General.Gear)
+    private val openLink = ActionLink("Problem page") { service.currentState().problem?.url?.let(BrowserUtil::browse) }
+    private val chips = JPanel(FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0)).apply {
+        isOpaque = false
+        add(timeChip)
+        add(memoryChip)
+        add(checkerChip)
+        add(openLink)
+    }
+    private val problemHeader = JPanel(VerticalLayout(JBUI.scale(2))).apply {
+        isOpaque = false
+        add(titleLabel)
+        add(groupLabel)
+        add(chips)
+    }
+
+    private val strip = VerdictStrip()
+    private val summaryLabel = JBLabel().apply { font = JBFont.small() }
+    private val totalsLabel = JBLabel().apply {
+        font = JBFont.small()
+        foreground = CphTheme.secondaryText
+    }
+    private val resultBlock = JPanel(VerticalLayout(JBUI.scale(4))).apply {
+        isOpaque = false
+        add(strip)
+        add(
+            JPanel(BorderLayout()).apply {
+                isOpaque = false
+                add(summaryLabel, BorderLayout.WEST)
+                add(totalsLabel, BorderLayout.EAST)
+            },
+        )
+    }
+
+    private val compileBanner = OutputBanner("Compiler output")
+    private val submissionBanner = OutputBanner("Submission output")
+    private val rowsColumn = ScrollableColumn().apply { layout = VerticalLayout(0) }
+    private val emptyState = createEmptyState()
+    private val cards = CardLayout()
+    private val center = JPanel(cards)
+
+    private val busyIcon = AsyncProcessIcon("CPH busy").apply { isVisible = false }
+    private val statusLabel = JBLabel().apply {
+        font = JBFont.small()
+        foreground = CphTheme.secondaryText
+    }
+
+    private val rows = linkedMapOf<Long, CaseRow>()
+    private val expandedIds = mutableSetOf<Long>()
+    private val autoOpenedIds = mutableSetOf<Long>()
+    private var loadedProblem: String? = null
+    private lateinit var leftToolbar: com.intellij.openapi.actionSystem.ActionToolbar
+    private lateinit var moreToolbar: com.intellij.openapi.actionSystem.ActionToolbar
+
+    private val caseCallbacks = CaseCallbacks(
+        onEdited = { id, input, output -> service.updateTestCase(id, input, output) },
+        onPersist = service::persistTestCases,
+        onToggleEnabled = { id, enabled -> service.setTestCaseEnabled(id, enabled) },
+        onRun = { id ->
+            rows.values.forEach(CaseRow::flushEdits)
+            service.runSingle(id)
+        },
+        onDelete = { id -> service.deleteTestCase(id) },
+        onSetExpected = { id -> service.setExpectedFromResult(id) },
+        onExpandedChanged = { id, expanded -> if (expanded) expandedIds += id else expandedIds -= id },
+    )
 
     init {
-        border = JBUI.Borders.empty(6)
-        add(createHeader(), BorderLayout.NORTH)
+        border = JBUI.Borders.empty()
+        add(createTop(), BorderLayout.NORTH)
 
-        contentPanel.layout = BoxLayout(contentPanel, BoxLayout.Y_AXIS)
-        add(
-            JBScrollPane(contentPanel).apply {
-                horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                border = JBUI.Borders.emptyTop(6)
-            },
-            BorderLayout.CENTER,
-        )
+        center.add(JBScrollPane(rowsColumn).apply {
+            border = JBUI.Borders.customLine(CphTheme.divider, 1, 0, 0, 0)
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        }, LIST_CARD)
+        center.add(emptyState, EMPTY_CARD)
+        add(center, BorderLayout.CENTER)
+        add(createStatusBar(), BorderLayout.SOUTH)
 
-        statusLabel.border = JBUI.Borders.empty(6, 2, 2, 2)
-        add(statusLabel, BorderLayout.SOUTH)
-
-        runTestCasesButton.addActionListener {
-            testCasePanels.forEach { it.flushEdits(persist = false) }
-            service.runAll()
-        }
-        stopButton.addActionListener { service.stop() }
-        addButton.addActionListener { service.addTestCase() }
-        importButton.addActionListener { chooseImportFile() }
-        exportButton.addActionListener { chooseExportFile() }
-        clearButton.addActionListener { confirmClearCases() }
-        resetButton.addActionListener { confirmResetProblem() }
-        openUrlButton.addActionListener { service.currentState().problem?.url?.let(BrowserUtil::browse) }
-        submitCodeforcesButton.addActionListener { service.prepareCodeforcesSubmission() }
-        submitKattisButton.addActionListener { confirmKattisSubmission() }
-        settingsButton.addActionListener { ShowSettingsUtil.getInstance().showSettingsDialog(project, "CPH") }
-        onlineJudgeEnabled.addActionListener {
-            if (!rendering) {
-                service.setOnlineJudge(onlineJudgeEnabled.isSelected)
-            }
-        }
-        checkerEnabled.addActionListener {
-            if (!rendering) {
-                if (checkerEnabled.isSelected && checkerPath.text.isBlank()) {
-                    chooseCheckerFile()
-                } else {
-                    service.setCustomCheckerPath(if (checkerEnabled.isSelected) checkerPath.text else "")
-                }
-            }
-        }
-        checkerBrowseButton.addActionListener { chooseCheckerFile() }
-        checkerPath.addActionListener { saveCheckerPath() }
-        checkerPath.addFocusListener(object : FocusAdapter() {
-            override fun focusLost(event: FocusEvent) {
-                saveCheckerPath()
-            }
-        })
+        runButton.addActionListener { runAll() }
+        strip.onSegmentClick = ::reveal
 
         service.addListener(this, ::render)
     }
 
-    override fun dispose() = Unit
+    override fun dispose() {
+        busyIcon.dispose()
+    }
 
-    private fun createHeader(): JPanel = JPanel().apply {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        add(buttonGrid(3, runTestCasesButton, stopButton, addButton))
-        add(buttonGrid(2, importButton, exportButton, clearButton, resetButton))
-        add(buttonGrid(2, openUrlButton, submitCodeforcesButton, submitKattisButton, settingsButton))
-        add(
-            JPanel(BorderLayout(4, 0)).apply {
-                border = JBUI.Borders.emptyTop(4)
-                add(
-                    JPanel(FlowLayout(FlowLayout.LEFT, 4, 0)).apply {
-                        add(onlineJudgeEnabled)
-                        add(checkerEnabled)
-                    },
-                    BorderLayout.WEST,
-                )
-                add(checkerPath, BorderLayout.CENTER)
-                add(checkerBrowseButton, BorderLayout.EAST)
-            },
+    private fun runAll() {
+        rows.values.forEach(CaseRow::flushEdits)
+        service.runAll()
+    }
+
+    private fun createTop(): JComponent {
+        val leftGroup = DefaultActionGroup(
+            action("Stop", AllIcons.Actions.Suspend, "Stop the current run") { service.stop() }
+                .enabledWhen { service.currentState().phase != RunPhase.IDLE },
+            action("Add testcase", AllIcons.General.Add, "Add an empty testcase") { service.addTestCase() }
+                .enabledWhen { hasProblem() && isIdle() },
+            action("Stress test", AllIcons.Actions.Lightning, "Compare with a brute force on generated input") {
+                configureAndRunStress()
+            }.enabledWhen { hasProblem() && isIdle() },
         )
+        leftToolbar = ActionManager.getInstance().createActionToolbar("CphToolbar", leftGroup, true).apply {
+            targetComponent = this@CphToolWindowPanel
+            setMinimumButtonSize(Dimension(JBUI.scale(26), JBUI.scale(26)))
+        }
+        val moreGroup = DefaultActionGroup().apply {
+            isPopup = true
+            templatePresentation.icon = AllIcons.Actions.More
+            templatePresentation.text = "More"
+            addAll(moreActions())
+        }
+        moreToolbar = ActionManager.getInstance()
+            .createActionToolbar("CphToolbarMore", DefaultActionGroup(moreGroup), true).apply {
+                targetComponent = this@CphToolWindowPanel
+                setMinimumButtonSize(Dimension(JBUI.scale(26), JBUI.scale(26)))
+            }
+
+        val controls = JPanel(BorderLayout(JBUI.scale(6), 0)).apply {
+            isOpaque = false
+            add(runButton, BorderLayout.WEST)
+            add(leftToolbar.component.apply { isOpaque = false }, BorderLayout.CENTER)
+            add(moreToolbar.component.apply { isOpaque = false }, BorderLayout.EAST)
+        }
+        return JPanel(VerticalLayout(JBUI.scale(10))).apply {
+            border = JBUI.Borders.empty(8, 10, 10, 6)
+            add(controls)
+            add(problemHeader)
+            add(resultBlock)
+        }
     }
 
-    private fun buttonGrid(columns: Int, vararg buttons: JButton): JPanel = JPanel(GridLayout(0, columns, 4, 4)).apply {
-        border = JBUI.Borders.emptyTop(4)
-        buttons.forEach(::add)
+    private fun createStatusBar(): JComponent = JPanel(BorderLayout(JBUI.scale(6), 0)).apply {
+        border = JBUI.Borders.compound(
+            JBUI.Borders.customLine(CphTheme.divider, 1, 0, 0, 0),
+            JBUI.Borders.empty(4, 10),
+        )
+        add(busyIcon, BorderLayout.WEST)
+        add(statusLabel, BorderLayout.CENTER)
     }
 
-    private fun render(state: CphUiState) {
+    private fun createEmptyState(): JComponent {
+        val content = JPanel(VerticalLayout(JBUI.scale(8))).apply {
+            isOpaque = false
+            add(JBLabel("No problem yet").apply { font = JBFont.h3() })
+            add(
+                JBLabel(
+                    "<html>Open a solution file and create testcases for it,<br>" +
+                        "or send a problem here with Competitive Companion.</html>",
+                ).apply { foreground = CphTheme.secondaryText },
+            )
+            add(
+                JButton("Create testcases for this file").apply {
+                    addActionListener { runAll() }
+                    putClientProperty(CREATE_BUTTON_KEY, true)
+                },
+            )
+            add(JBLabel("Shortcut: Ctrl+Alt+B").apply {
+                font = JBFont.small()
+                foreground = CphTheme.secondaryText
+            })
+        }
+        return JPanel(GridBagLayout()).apply {
+            add(content, GridBagConstraints())
+            border = JBUI.Borders.empty(24)
+        }
+    }
+
+    private fun moreActions(): List<AnAction> = listOf(
+        action("Import testcases…", AllIcons.Actions.Download, null) { chooseImportFile() }
+            .enabledWhen { hasProblem() && isIdle() },
+        action("Export testcases…", AllIcons.ToolbarDecorator.Export, null) { chooseExportFile() }
+            .enabledWhen { hasProblem() && isIdle() },
+        Separator.getInstance(),
+        flag("Define ONLINE_JUDGE", isOn = { service.isOnlineJudgeEnabled() }) { service.setOnlineJudge(it) },
+        flag("Use a custom checker", isOn = { !currentProblem()?.customCheckerPath.isNullOrBlank() }) { on ->
+            if (on) chooseCheckerFile() else service.setCustomCheckerPath("")
+        }.enabledWhen { hasProblem() && isIdle() },
+        Separator.getInstance(),
+        action("Submit to Codeforces", null, null) { service.prepareCodeforcesSubmission() }
+            .enabledWhen { currentProblem()?.url?.let(::isCodeforcesUrl) == true && isIdle() },
+        action("Submit to Kattis…", null, null) { confirmKattisSubmission() }
+            .enabledWhen { currentProblem()?.url?.let(::isKattisUrl) == true && isIdle() },
+        Separator.getInstance(),
+        action("Clear all testcases…", null, null) { confirmClearCases() }
+            .enabledWhen { hasProblem() && isIdle() },
+        action("Reset problem…", null, null) { confirmResetProblem() }
+            .enabledWhen { hasProblem() && isIdle() },
+        Separator.getInstance(),
+        action("Settings", AllIcons.General.GearPlain, null) {
+            ShowSettingsUtil.getInstance().showSettingsDialog(project, "CPH")
+        },
+    )
+
+    private fun currentProblem(): Problem? = service.currentState().problem
+
+    private fun hasProblem(): Boolean = currentProblem() != null
+
+    private fun isIdle(): Boolean = service.currentState().phase == RunPhase.IDLE
+
+    internal fun refreshToolbarsNow() {
+        leftToolbar.updateActionsImmediately()
+        moreToolbar.updateActionsImmediately()
+    }
+
+    internal fun render(state: CphUiState) {
         val idle = state.phase == RunPhase.IDLE
         val problem = state.problem
-        runTestCasesButton.isEnabled = CphUiActionPolicy.canRunTestCases(
-            phase = state.phase,
-            supportedActiveFile = service.hasSupportedActiveFile(),
-        )
-        stopButton.isEnabled = !idle
-        addButton.isEnabled = problem != null && idle
-        importButton.isEnabled = problem != null && idle
-        exportButton.isEnabled = problem != null && idle
-        clearButton.isEnabled = problem != null && idle
-        resetButton.isEnabled = problem != null && idle
-        openUrlButton.isEnabled = problem?.url?.startsWith("http") == true
-        submitCodeforcesButton.isEnabled = problem != null && idle && isCodeforcesUrl(problem.url)
-        submitKattisButton.isEnabled = problem != null && idle && isKattisUrl(problem.url)
-        checkerEnabled.isEnabled = problem != null && idle
-        onlineJudgeEnabled.isEnabled = idle
-        checkerPath.isEnabled = problem != null && idle && checkerEnabled.isSelected
-        checkerBrowseButton.isEnabled = problem != null && idle
+        runButton.isEnabled = CphUiActionPolicy.canRunTestCases(state.phase, service.hasSupportedActiveFile())
+        leftToolbar.updateActionsAsync()
+        moreToolbar.updateActionsAsync()
+
         statusLabel.text = state.statusMessage
+        statusLabel.toolTipText = state.statusMessage
+        busyIcon.isVisible = !idle
+        if (idle) busyIcon.suspend() else busyIcon.resume()
 
-        rendering = true
-        try {
-            checkerEnabled.isSelected = !problem?.customCheckerPath.isNullOrBlank()
-            onlineJudgeEnabled.isSelected = service.isOnlineJudgeEnabled()
-            val path = problem?.customCheckerPath.orEmpty()
-            if (checkerPath.text != path) {
-                checkerPath.text = path
-            }
-            checkerPath.isEnabled = problem != null && idle && checkerEnabled.isSelected
-        } finally {
-            rendering = false
-        }
-
-        contentPanel.removeAll()
-        testCasePanels.clear()
         if (problem == null) {
-            contentPanel.add(JBLabel("No problem loaded."))
-            contentPanel.add(Box.createVerticalStrut(8))
-            contentPanel.add(JBLabel("Press Run Testcases or Ctrl+Alt+B to create a local problem."))
-        } else {
-            contentPanel.add(JBLabel(problem.name).apply { font = font.deriveFont(Font.BOLD, font.size2D + 2f) })
-            if (problem.group.isNotBlank()) {
-                contentPanel.add(JBLabel(problem.group).apply { foreground = JBColor.GRAY })
-            }
-            contentPanel.add(
-                JBLabel(
-                    "${problem.tests.size} case(s)  |  ${problem.timeLimit} ms  |  ${problem.memoryLimit} MB",
-                ).apply { foreground = JBColor.GRAY },
-            )
-            if (state.compileOutput.isNotBlank()) {
-                contentPanel.add(Box.createVerticalStrut(8))
-                contentPanel.add(section("Compiler output", state.compileOutput))
-            }
-            if (state.submissionOutput.isNotBlank()) {
-                contentPanel.add(Box.createVerticalStrut(8))
-                contentPanel.add(section("Submission output", state.submissionOutput))
-            }
-            contentPanel.add(Box.createVerticalStrut(8))
-            problem.tests.forEachIndexed { index, testCase ->
-                val testCasePanel = TestCasePanel(
-                    index = index,
-                    testCase = testCase,
-                    result = state.results[testCase.id],
-                    enabled = idle,
-                    customCheckerEnabled = !problem.customCheckerPath.isNullOrBlank(),
-                    onChanged = { input, output -> service.updateTestCase(testCase.id, input, output) },
-                    onPersist = service::persistTestCases,
-                    onRun = { service.runSingle(testCase.id) },
-                    onDelete = { service.deleteTestCase(testCase.id) },
-                )
-                testCasePanels += testCasePanel
-                contentPanel.add(
-                    testCasePanel,
-                )
-                contentPanel.add(Box.createVerticalStrut(8))
-            }
+            loadedProblem = null
+            rows.clear()
+            rowsColumn.removeAll()
+            problemHeader.isVisible = false
+            resultBlock.isVisible = false
+            cards.show(center, EMPTY_CARD)
+            return
         }
-        contentPanel.revalidate()
-        contentPanel.repaint()
+        cards.show(center, LIST_CARD)
+        problemHeader.isVisible = true
+        resultBlock.isVisible = true
+        renderProblemHeader(problem)
+        renderResults(problem, state)
+
+        compileBanner.show(
+            text = state.compileOutput,
+            isError = state.results.values.any { it.verdict == Verdict.COMPILATION_ERROR },
+        )
+        submissionBanner.show(text = state.submissionOutput, isError = false)
+        reconcileRows(problem, state, idle)
+        revalidate()
+        repaint()
+    }
+
+    private fun renderProblemHeader(problem: Problem) {
+        titleLabel.text = problem.name
+        groupLabel.text = problem.group
+        groupLabel.isVisible = problem.group.isNotBlank() && problem.group != "local"
+        timeChip.text = formatDuration(problem.timeLimit)
+        memoryChip.text = "${problem.memoryLimit} MB"
+        // A local problem has no real limits, only the defaults, so showing them would mislead.
+        timeChip.isVisible = !problem.local
+        memoryChip.isVisible = !problem.local
+        val checker = problem.customCheckerPath?.takeIf { it.isNotBlank() }
+        checkerChip.isVisible = checker != null
+        checkerChip.text = checker?.let { "Checker: ${Path.of(it).fileName}" }.orEmpty()
+        openLink.isVisible = problem.url.startsWith("http")
+    }
+
+    private fun renderResults(problem: Problem, state: CphUiState) {
+        strip.update(
+            problem.tests.mapIndexed { index, testCase ->
+                val verdict = state.results[testCase.id]?.verdict ?: Verdict.PENDING
+                VerdictStrip.Segment(
+                    id = testCase.id,
+                    label = "Case ${index + 1}: ${if (testCase.enabled) verdict.label else "Disabled"}",
+                    tone = CphTheme.style(verdict).tone,
+                    enabled = testCase.enabled,
+                )
+            },
+        )
+        val summary = RunSummary.of(problem.tests, state.results)
+        summaryLabel.text = summary.headline()
+        summaryLabel.foreground = when {
+            summary.failed > 0 -> CphTheme.color(VerdictTone.FAIL)
+            summary.enabled > 0 && summary.passed == summary.enabled -> CphTheme.color(VerdictTone.PASS)
+            else -> CphTheme.secondaryText
+        }
+        totalsLabel.text = listOfNotNull(
+            summary.totalMs.takeIf { it > 0 }?.let(::formatDuration),
+            summary.peakMemoryKb?.let(::formatMemory),
+        ).joinToString("   ")
+    }
+
+    private fun reconcileRows(problem: Problem, state: CphUiState, idle: Boolean) {
+        val firstRender = loadedProblem != problem.sourcePath
+        if (firstRender) {
+            loadedProblem = problem.sourcePath
+            rows.clear()
+            expandedIds.clear()
+            autoOpenedIds.clear()
+        }
+        val presentIds = problem.tests.map { it.id }.toSet()
+        rows.keys.retainAll(presentIds)
+        expandedIds.retainAll(presentIds)
+
+        val customChecker = !problem.customCheckerPath.isNullOrBlank()
+        problem.tests.forEachIndexed { index, testCase ->
+            val isNew = testCase.id !in rows
+            val row = rows.getOrPut(testCase.id) { CaseRow(testCase.id, caseCallbacks) }
+            if (isNew) {
+                // Blank cases are waiting for input; a case added after load is one the user just asked for.
+                if (!firstRender || (testCase.input.isBlank() && testCase.output.isBlank())) {
+                    expandedIds += testCase.id
+                }
+            }
+            val result = state.results[testCase.id]
+            val verdict = result?.verdict ?: Verdict.PENDING
+            if (CphTheme.isFailure(verdict) && autoOpenedIds.add(testCase.id)) {
+                expandedIds += testCase.id
+            } else if (verdict == Verdict.PENDING) {
+                autoOpenedIds -= testCase.id
+            }
+            row.update(CaseModel(index, testCase, result, idle, customChecker))
+            row.setExpanded(testCase.id in expandedIds, notify = false)
+        }
+
+        val ordered = listOf<JComponent>(compileBanner, submissionBanner) + problem.tests.mapNotNull { rows[it.id] }
+        val current = rowsColumn.components.toList()
+        if (current != ordered) {
+            rowsColumn.removeAll()
+            ordered.forEach(rowsColumn::add)
+        }
+    }
+
+    private fun reveal(id: Long) {
+        val row = rows[id] ?: return
+        expandedIds += id
+        row.setExpanded(true, notify = false)
+        SwingUtilities.invokeLater {
+            row.scrollRectToVisible(Rectangle(0, 0, row.width, row.height))
+        }
+    }
+
+    // Menu and dialog plumbing ------------------------------------------------------------------------------
+
+    private fun action(text: String, icon: javax.swing.Icon?, description: String?, perform: () -> Unit) =
+        PanelAction(text, description, icon, perform)
+
+    private fun flag(text: String, isOn: () -> Boolean, change: (Boolean) -> Unit) = PanelFlag(text, isOn, change)
+
+    private fun configureAndRunStress() {
+        val problem = currentProblem() ?: return
+        val dialog = StressDialog(
+            project,
+            problem.stressGeneratorPath.orEmpty(),
+            problem.stressBrutePath.orEmpty(),
+        )
+        if (dialog.showAndGet()) {
+            rows.values.forEach(CaseRow::flushEdits)
+            service.setStressFiles(dialog.generatorPath, dialog.brutePath)
+            service.runStress(dialog.iterations)
+        }
     }
 
     private fun chooseImportFile() {
@@ -276,24 +465,8 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             this,
             project,
             initialVirtualFile(),
-        )
-        if (selected != null) {
-            rendering = true
-            checkerEnabled.isSelected = true
-            checkerPath.text = selected.path
-            rendering = false
-            service.setCustomCheckerPath(checkerPath.text)
-        } else if (checkerPath.text.isBlank()) {
-            rendering = true
-            checkerEnabled.isSelected = false
-            rendering = false
-        }
-    }
-
-    private fun saveCheckerPath() {
-        if (!rendering && checkerEnabled.isSelected) {
-            service.setCustomCheckerPath(checkerPath.text, publish = false)
-        }
+        ) ?: return
+        service.setCustomCheckerPath(selected.path)
     }
 
     private fun confirmClearCases() {
@@ -341,192 +514,92 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
     private fun initialVirtualFile(): VirtualFile? = LocalFileSystem.getInstance()
         .findFileByNioFile(initialDirectory())
 
-    private fun section(title: String, text: String): JPanel = JPanel(BorderLayout()).apply {
-        border = BorderFactory.createTitledBorder(title)
-        add(readOnlyArea(text, rows = 5), BorderLayout.CENTER)
-        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+    private companion object {
+        const val LIST_CARD = "list"
+        const val EMPTY_CARD = "empty"
+        const val CREATE_BUTTON_KEY = "cph.createButton"
     }
 }
 
-private class TestCasePanel(
-    index: Int,
-    testCase: TestCase,
-    result: TestRunResult?,
-    enabled: Boolean,
-    customCheckerEnabled: Boolean,
-    private val onChanged: (String, String) -> Unit,
-    private val onPersist: () -> Unit,
-    onRun: () -> Unit,
-    onDelete: () -> Unit,
-) : JPanel(BorderLayout()) {
-    private val input = editableArea(testCase.input)
-    private val expected = editableArea(testCase.output)
-    private val saveTimer = Timer(300) { onPersist() }.apply { isRepeats = false }
+/** A menu or toolbar entry whose enabled state is read from the live service state. */
+internal class PanelAction(
+    text: String,
+    description: String?,
+    icon: javax.swing.Icon?,
+    private val perform: () -> Unit,
+) : DumbAwareAction(text, description, icon) {
+    private var enabledCheck: () -> Boolean = { true }
+
+    fun enabledWhen(check: () -> Boolean): PanelAction = apply { enabledCheck = check }
+
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+    override fun update(event: AnActionEvent) {
+        event.presentation.isEnabled = enabledCheck()
+    }
+
+    override fun actionPerformed(event: AnActionEvent) = perform()
+}
+
+internal class PanelFlag(
+    text: String,
+    private val isOn: () -> Boolean,
+    private val change: (Boolean) -> Unit,
+) : ToggleAction(text), DumbAware {
+    private var enabledCheck: () -> Boolean = { true }
+
+    fun enabledWhen(check: () -> Boolean): PanelFlag = apply { enabledCheck = check }
+
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+    override fun update(event: AnActionEvent) {
+        super.update(event)
+        event.presentation.isEnabled = enabledCheck()
+    }
+
+    override fun isSelected(event: AnActionEvent): Boolean = isOn()
+
+    override fun setSelected(event: AnActionEvent, state: Boolean) = change(state)
+}
+
+/** A collapsible block for compiler or submission output, tinted red when it holds an error. */
+internal class OutputBanner(private val title: String) : JPanel(VerticalLayout(JBUI.scale(4))) {
+    private val toggle = ActionLink(title) { setOpen(!open) }
+    private val area = DataArea(editable = false, emptyText = "")
+    private var open = false
+    private var errorSeen = false
 
     init {
-        border = BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(JBColor.border()),
-            JBUI.Borders.empty(4),
-        )
-        val verdict = result?.verdict ?: Verdict.PENDING
-        add(
-            JPanel(BorderLayout()).apply {
-                add(
-                    JBLabel("Case ${index + 1} — ${verdict.label}${durationSuffix(result)}").apply {
-                        font = font.deriveFont(Font.BOLD)
-                        foreground = verdictColor(verdict)
-                    },
-                    BorderLayout.WEST,
-                )
-                add(
-                    JPanel(FlowLayout(FlowLayout.RIGHT, 4, 0)).apply {
-                        add(JButton("Run").apply {
-                            isEnabled = enabled
-                            addActionListener {
-                                flushEdits(persist = false)
-                                onRun()
-                            }
-                        })
-                        add(JButton("Delete").apply {
-                            isEnabled = enabled
-                            addActionListener { onDelete() }
-                        })
-                    },
-                    BorderLayout.EAST,
-                )
-            },
-            BorderLayout.NORTH,
-        )
-
-        add(
-            JPanel(GridLayout(0, 1, 0, 4)).apply {
-                add(labeledArea("Input", input))
-                if (!customCheckerEnabled) {
-                    add(labeledArea("Expected output", expected))
-                }
-                if (result != null && result.verdict != Verdict.PENDING && result.verdict != Verdict.RUNNING) {
-                    add(labeledArea("Result", readOnlyArea(formatResult(result), rows = 6)))
-                }
-            },
-            BorderLayout.CENTER,
-        )
-
-        val listener = object : DocumentAdapter() {
-            override fun textChanged(event: DocumentEvent) {
-                onChanged(input.text, expected.text)
-                saveTimer.restart()
-            }
-        }
-        input.document.addDocumentListener(listener)
-        expected.document.addDocumentListener(listener)
-        maximumSize = Dimension(Int.MAX_VALUE, preferredSize.height)
+        isOpaque = false
+        border = JBUI.Borders.customLine(CphTheme.divider, 0, 0, 1, 0)
+        add(toggle)
+        add(area)
+        isVisible = false
+        area.isVisible = false
     }
 
-    fun flushEdits(persist: Boolean = true) {
-        saveTimer.stop()
-        onChanged(input.text, expected.text)
-        if (persist) {
-            onPersist()
+    fun show(text: String, isError: Boolean) {
+        isVisible = text.isNotBlank()
+        if (!isVisible) {
+            errorSeen = false
+            return
         }
+        area.setTextIfIdle(text)
+        toggle.icon = if (isError) AllIcons.RunConfigurations.TestError else null
+        toggle.text = if (isError) "$title: errors" else title
+        // Errors open themselves once; after that the user's choice sticks.
+        if (isError && !errorSeen) setOpen(true)
+        errorSeen = isError
+        border = JBUI.Borders.compound(
+            JBUI.Borders.customLine(CphTheme.divider, 0, 0, 1, 0),
+            JBUI.Borders.empty(6, 10),
+        )
     }
 
-    private fun labeledArea(label: String, area: JBScrollPane): JPanel = JPanel(BorderLayout(0, 2)).apply {
-        add(JBLabel(label), BorderLayout.NORTH)
-        add(area, BorderLayout.CENTER)
-    }
-
-    companion object {
-        private fun durationSuffix(result: TestRunResult?): String =
-            result?.durationMs?.takeIf { it > 0 }?.let { " (${it} ms)" }.orEmpty()
-
-        private fun formatResult(result: TestRunResult): String = buildString {
-            if (result.stdout.isNotEmpty()) {
-                append("stdout:\n")
-                append(result.stdout)
-                if (!result.stdout.endsWith('\n')) append('\n')
-            }
-            if (result.stderr.isNotEmpty()) {
-                append("stderr:\n")
-                append(result.stderr)
-                if (!result.stderr.endsWith('\n')) append('\n')
-            }
-            if (result.checkerStdout.isNotEmpty()) {
-                append("checker stdout:\n")
-                append(result.checkerStdout)
-                if (!result.checkerStdout.endsWith('\n')) append('\n')
-            }
-            if (result.checkerStderr.isNotEmpty()) {
-                append("checker stderr:\n")
-                append(result.checkerStderr)
-                if (!result.checkerStderr.endsWith('\n')) append('\n')
-            }
-            if (result.differences.isNotEmpty()) {
-                append("differences:\n")
-                result.differences.take(100).forEach { difference ->
-                    append("line ${difference.lineNumber}: expected=")
-                    append(difference.expected ?: "<missing>")
-                    append(", actual=")
-                    append(difference.actual ?: "<missing>")
-                    append('\n')
-                }
-            }
-            if (isEmpty()) {
-                append("Process exited with code ${result.exitCode ?: "unknown"}.")
-            }
-        }
-
-        private fun verdictColor(verdict: Verdict): Color = when (verdict) {
-            Verdict.ACCEPTED -> JBColor(0x2E7D32, 0x6AAB73)
-            Verdict.WRONG_ANSWER,
-            Verdict.RUNTIME_ERROR,
-            Verdict.OUTPUT_LIMIT_EXCEEDED,
-            Verdict.CHECKER_ERROR,
-            Verdict.COMPILATION_ERROR,
-            -> JBColor(0xC62828, 0xF75464)
-
-            Verdict.TIME_LIMIT_EXCEEDED -> JBColor(0xEF6C00, 0xF2C55C)
-            Verdict.CANCELLED,
-            Verdict.UNSUPPORTED,
-            -> JBColor.GRAY
-
-            Verdict.RUNNING -> JBColor(0x1565C0, 0x548AF7)
-            Verdict.PENDING -> JBColor.foreground()
-        }
+    private fun setOpen(value: Boolean) {
+        open = value
+        area.isVisible = value
+        revalidate()
+        repaint()
     }
 }
-
-private fun editableArea(text: String): JBScrollPane {
-    val area = JBTextArea(text, 4, 40).apply {
-        font = JBFont.create(Font(Font.MONOSPACED, Font.PLAIN, font.size))
-        lineWrap = false
-    }
-    return JBScrollPane(area).apply {
-        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
-        verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-        putClientProperty(TEXT_AREA_PROPERTY, area)
-    }
-}
-
-private fun readOnlyArea(text: String, rows: Int): JBScrollPane {
-    val area = JBTextArea(text, rows, 40).apply {
-        isEditable = false
-        font = JBFont.create(Font(Font.MONOSPACED, Font.PLAIN, font.size))
-        lineWrap = false
-    }
-    return JBScrollPane(area).apply {
-        horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
-        verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
-        putClientProperty(TEXT_AREA_PROPERTY, area)
-    }
-}
-
-private val JBScrollPane.textArea: JBTextArea
-    get() = getClientProperty(TEXT_AREA_PROPERTY) as JBTextArea
-
-private val JBScrollPane.text: String
-    get() = textArea.text
-
-private val JBScrollPane.document: javax.swing.text.Document
-    get() = textArea.document
-
-private const val TEXT_AREA_PROPERTY = "cph.textArea"

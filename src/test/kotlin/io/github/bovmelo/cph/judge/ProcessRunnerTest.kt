@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class ProcessRunnerTest {
@@ -34,6 +35,12 @@ class ProcessRunnerTest {
                             case "fail" -> {
                                 System.err.print("fixture failure");
                                 System.exit(7);
+                            }
+                            case "alloc" -> {
+                                byte[] bytes = new byte[200 * 1024 * 1024];
+                                java.util.Arrays.fill(bytes, (byte) 1);
+                                Thread.sleep(300L);
+                                System.out.print(bytes[12345]);
                             }
                             case "spam" -> {
                                 byte[] bytes = new byte[5 * 1024 * 1024];
@@ -80,6 +87,26 @@ class ProcessRunnerTest {
         assertTrue(missing.launchError)
         assertTrue(spam.outputLimitExceeded)
         assertTrue(spam.stdout.length <= 4 * 1024 * 1024)
+    }
+
+    @Test
+    fun `reports the peak memory of a real process`() {
+        val result = ProcessRunner().run(command("alloc"), "", 10_000) { false }
+
+        assertEquals("1", result.stdout)
+        val supported = System.getProperty("os.name").let { it.startsWith("Mac") || it.startsWith("Linux") }
+        if (supported) {
+            val peakKb = assertNotNull(result.peakMemoryKb, "peak memory should be measured on this OS")
+            // The fixture touches 200 MiB; allow for footprint accounting differences between kernels.
+            assertTrue(peakKb in 150_000..1_500_000, "unexpected peak memory: $peakKb KiB")
+        }
+    }
+
+    @Test
+    fun `memory measurement can be disabled`() {
+        val result = ProcessRunner(memoryReader = null).run(command("echo"), "x", 5_000) { false }
+
+        assertEquals(null, result.peakMemoryKb)
     }
 
     @Test

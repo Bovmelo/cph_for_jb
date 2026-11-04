@@ -11,8 +11,6 @@ import io.github.bovmelo.cph.settings.CphSettingsSnapshot
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.util.Comparator
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -56,6 +54,20 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         }
     }
 
+    fun stress(
+        run: JudgeRun,
+        config: StressConfig,
+        settings: CphSettingsSnapshot,
+        onProgress: (String) -> Unit,
+    ): StressOutcome {
+        check(activeRun.get() === run) { "The judge run was not prepared by this engine." }
+        try {
+            return StressRunner(processRunner).run(config, settings, run, onProgress)
+        } finally {
+            activeRun.compareAndSet(run, null)
+        }
+    }
+
     fun cancel() {
         activeRun.get()?.cancel()
         processRunner.cancel()
@@ -70,7 +82,7 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
     ) {
         val sourcePath = Path.of(problem.sourcePath).toAbsolutePath().normalize()
         val adapter = LanguageAdapters.resolve(sourcePath)
-        val cases = problem.tests.filter { selectedCaseIds == null || it.id in selectedCaseIds }
+        val cases = problem.tests.filter { if (selectedCaseIds == null) it.enabled else it.id in selectedCaseIds }
 
         if (run.isCancellationRequested()) {
             cancelCases(cases, callbacks)
@@ -294,24 +306,6 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         else -> null
     }
 
-    private fun applyPreparations(plan: ExecutionPlan, buildDirectory: Path) {
-        val normalizedBuildDirectory = buildDirectory.toAbsolutePath().normalize()
-        plan.preparations.forEach { preparation ->
-            val target = preparation.target.toAbsolutePath().normalize()
-            require(target.startsWith(normalizedBuildDirectory)) { "A preparation target escaped the build directory." }
-            Files.createDirectories(target.parent)
-            when (preparation) {
-                is FilePreparation.Copy -> Files.copy(
-                    preparation.source,
-                    target,
-                    StandardCopyOption.REPLACE_EXISTING,
-                )
-
-                is FilePreparation.Write -> Files.writeString(target, preparation.content, StandardCharsets.UTF_8)
-            }
-        }
-    }
-
     private fun TestCase.processResult(
         verdict: Verdict,
         processResult: ProcessResult,
@@ -324,6 +318,7 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         stderr = processResult.stderr,
         exitCode = processResult.exitCode,
         durationMs = processResult.durationMs,
+        peakMemoryKb = processResult.peakMemoryKb,
         differences = differences,
         checkerStdout = checkerStdout,
         checkerStderr = checkerStderr,
@@ -335,6 +330,7 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         stderr: String = "",
         exitCode: Int? = null,
         durationMs: Long = 0,
+        peakMemoryKb: Long? = null,
         differences: List<LineDifference> = emptyList(),
         checkerStdout: String = "",
         checkerStderr: String = "",
@@ -345,6 +341,7 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
         stderr = stderr,
         exitCode = exitCode,
         durationMs = durationMs,
+        peakMemoryKb = peakMemoryKb,
         differences = differences,
         checkerStdout = checkerStdout,
         checkerStderr = checkerStderr,
@@ -353,13 +350,5 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
     private fun cancelCases(cases: List<TestCase>, callbacks: JudgeCallbacks) {
         cases.forEach { callbacks.onResult(it.result(Verdict.CANCELLED)) }
         callbacks.onPhase(RunPhase.IDLE, "Run cancelled.")
-    }
-
-    private fun deleteTree(root: Path) {
-        runCatching {
-            Files.walk(root).use { paths ->
-                paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
-            }
-        }
     }
 }

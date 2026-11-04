@@ -6,20 +6,21 @@ import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.table.JBTable
-import com.intellij.util.ui.FormBuilder
+import com.intellij.ui.dsl.builder.Align
+import com.intellij.ui.dsl.builder.AlignX
+import com.intellij.ui.dsl.builder.panel
+import com.intellij.util.ui.JBUI
 import io.github.bovmelo.cph.companion.CompanionServerService
 import io.github.bovmelo.cph.model.LanguageId
-import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.JComboBox
 import javax.swing.JComponent
-import javax.swing.JPanel
 import javax.swing.JSpinner
 import javax.swing.SpinnerNumberModel
 import javax.swing.table.DefaultTableModel
 
 class CphSettingsConfigurable : Configurable {
-    private var component: JPanel? = null
+    private var component: JComponent? = null
     private val language = JComboBox(LanguageId.entries.map { it.displayName }.toTypedArray())
     private val port = JSpinner(SpinnerNumberModel(27_121, 1_024, 65_535, 1))
     private val timeout = JSpinner(SpinnerNumberModel(3_000L, 100L, 120_000L, 100L))
@@ -45,27 +46,54 @@ class CphSettingsConfigurable : Configurable {
     override fun createComponent(): JComponent {
         if (component == null) {
             val toolchainScrollPane = JBScrollPane(toolchainTable).apply {
-                preferredSize = Dimension(860, 300)
+                setColumnHeaderView(toolchainTable.tableHeader)
+                preferredSize = Dimension(JBUI.scale(720), JBUI.scale(260))
             }
-            component = JPanel(BorderLayout()).apply {
-                add(
-                    FormBuilder.createFormBuilder()
-                        .addLabeledComponent("Default language:", language)
-                        .addLabeledComponent("Companion port:", port)
-                        .addLabeledComponent("Testcase timeout (ms):", timeout)
-                        .addLabeledComponent("Compilation timeout (ms):", compileTimeout)
-                        .addComponent(failOnStderr)
-                        .addComponent(onlineJudge)
-                        .addComponent(autoLoadActiveFile)
-                        .addLabeledComponent("Imported problem directory:", problemDirectory)
-                        .addSeparator()
-                        .addLabeledComponent("Language toolchains:", toolchainScrollPane)
-                        .addSeparator()
-                        .addLabeledComponent("Default template file:", templatePath)
-                        .addComponentFillVertically(JPanel(), 0)
-                        .panel,
-                    BorderLayout.CENTER,
-                )
+            component = panel {
+                group("General") {
+                    row("Default language:") { cell(language) }
+                    row { cell(autoLoadActiveFile) }
+                    row("Problem folder:") {
+                        cell(problemDirectory)
+                            .align(AlignX.FILL)
+                            .comment("Where imported solutions are created. Leave empty to use the project root.")
+                    }
+                    row("Template file:") {
+                        cell(templatePath)
+                            .align(AlignX.FILL)
+                            .comment("Used for every new solution. Leave empty to use the built-in template for the language.")
+                    }
+                }
+                group("Judging") {
+                    row("Testcase timeout:") {
+                        cell(timeout)
+                        label("ms")
+                    }
+                    row("Compilation timeout:") {
+                        cell(compileTimeout)
+                        label("ms")
+                    }
+                    row { cell(failOnStderr) }
+                    row { cell(onlineJudge) }
+                }
+                group("Competitive Companion") {
+                    row("Port:") {
+                        cell(port)
+                            .comment("The listener only accepts connections from this computer. Changing the port restarts it.")
+                    }
+                }
+                group("Language toolchains") {
+                    row {
+                        comment(
+                            "Commands are run without a shell, so use a full path when a tool is not on PATH. " +
+                                "Leave the compiler empty for interpreted languages and the runtime empty for languages that build a native binary. " +
+                                "Double-click a cell to edit it.",
+                        )
+                    }
+                    row {
+                        cell(toolchainScrollPane).align(Align.FILL)
+                    }.resizableRow()
+                }
             }
             reset()
         }

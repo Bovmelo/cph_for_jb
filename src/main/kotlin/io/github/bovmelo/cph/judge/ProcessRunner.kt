@@ -20,6 +20,7 @@ data class ProcessResult(
     val cancelled: Boolean = false,
     val launchError: Boolean = false,
     val outputLimitExceeded: Boolean = false,
+    val peakMemoryKb: Long? = null,
 )
 
 interface ProcessExecutor {
@@ -33,7 +34,9 @@ interface ProcessExecutor {
     fun cancel()
 }
 
-class ProcessRunner : ProcessExecutor {
+class ProcessRunner(
+    private val memoryReader: ProcessMemoryReader? = ProcessMemoryReaders.forCurrentOs(),
+) : ProcessExecutor {
     private val activeHandler = AtomicReference<OSProcessHandler?>()
 
     override fun run(
@@ -88,8 +91,10 @@ class ProcessRunner : ProcessExecutor {
         })
 
         activeHandler.set(handler)
+        var memoryMonitor: PeakMemoryMonitor? = null
         return try {
             handler.startNotify()
+            memoryMonitor = memoryReader?.let { PeakMemoryMonitor(handler.process.pid(), it) }
             if (cancellationRequested()) {
                 handler.destroyProcess()
             } else {
@@ -109,6 +114,7 @@ class ProcessRunner : ProcessExecutor {
                 handler.waitFor(PROCESS_SHUTDOWN_GRACE_MS)
             }
 
+            val peakMemoryKb = memoryMonitor?.stop()
             ProcessResult(
                 stdout = stdout.toString(),
                 stderr = stderr.toString(),
@@ -117,8 +123,10 @@ class ProcessRunner : ProcessExecutor {
                 timedOut = timedOut,
                 cancelled = cancelled || cancellationRequested(),
                 outputLimitExceeded = outputLimitExceeded.get(),
+                peakMemoryKb = peakMemoryKb,
             )
         } finally {
+            memoryMonitor?.stop()
             activeHandler.compareAndSet(handler, null)
         }
     }

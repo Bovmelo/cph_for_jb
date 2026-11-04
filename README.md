@@ -12,6 +12,10 @@ Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform�
 - 将题目元数据保存为兼容 CPH 的 `.cph/.<source>_<md5>.prob` 文件。
 - 每次运行只编译一次，随后顺序执行用例；支持编译错误、运行错误、stderr 策略、超时、输出上限和取消。
 - 按 CPH 规则忽略每行首尾空白，并展示逐行输出差异。
+- 每个用例同时显示耗时和峰值内存（Linux 读取 `VmHWM`，macOS 读取 `proc_pid_rusage` 的峰值物理内存，Windows 读取 `PeakWorkingSetSize`；读取失败时只显示耗时）。注意 JVM 语言的内存包含 JVM 自身的基础开销。
+- 判题结果为 Wrong Answer 时可点击 **Set Expected**，把本次输出直接设为预期输出。
+- 每个用例可单独启用/禁用：禁用的用例会被 Run Testcases 跳过，但仍可单独运行。
+- 对拍（Stress Test）：选择生成器和暴力解，自动循环比对；发现差异后，把触发用例（输入 + 暴力解输出）加入用例列表。
 - 支持 Python 自定义 checker（Special Judge）。checker 通过临时输入/输出文件获得数据，并用退出码决定结果。
 - 兼容最新版 cph-submit 的 `GET /getSubmit` 轮询协议，可把 Codeforces 源码一次性安全交付给浏览器扩展。
 - 支持本机 Kattis `submit.py` 客户端，并在真实提交前要求用户确认。
@@ -65,6 +69,16 @@ python3 checker.py <input-file> <actual-output-file>
 - checker 无法启动、超时或输出过大：Checker Error。
 - checker 的 stdout/stderr 会显示在用例结果中。
 - 临时文件会在 checker 完成后删除；启用 checker 时预期输出不参与判定。
+
+## 对拍
+
+点击 **Stress Test**，选择生成器和暴力解（任意受支持语言）并设置迭代次数。每轮：
+
+1. 以迭代编号（从 1 开始）作为第一个命令行参数运行生成器，其 stdout 作为输入。
+2. 用该输入分别运行暴力解和当前源码，按 CPH 规则逐行比较输出。
+3. 首次出现不一致（WA、RE、TLE、输出超限）时停止，并把该输入与暴力解输出作为新用例加入列表。
+
+生成器或暴力解自身失败时报告为错误，而不是当前源码的失败；对拍不使用自定义 checker。
 
 ## 用例 JSON
 

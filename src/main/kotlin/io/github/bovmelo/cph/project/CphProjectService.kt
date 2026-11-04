@@ -18,6 +18,8 @@ import io.github.bovmelo.cph.judge.JudgeCallbacks
 import io.github.bovmelo.cph.judge.JudgeEngine
 import io.github.bovmelo.cph.judge.JudgeRun
 import io.github.bovmelo.cph.judge.ProcessRunner
+import io.github.bovmelo.cph.judge.StressConfig
+import io.github.bovmelo.cph.judge.StressOutcome
 import io.github.bovmelo.cph.model.CompanionProblemPayload
 import io.github.bovmelo.cph.model.CphUiState
 import io.github.bovmelo.cph.model.LanguageId
@@ -26,6 +28,7 @@ import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.model.RunPhase
 import io.github.bovmelo.cph.model.TestCase
 import io.github.bovmelo.cph.model.TestRunResult
+import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.persistence.ProblemStore
 import io.github.bovmelo.cph.persistence.TestCaseExchange
 import io.github.bovmelo.cph.settings.CphSettings
@@ -147,6 +150,38 @@ class CphProjectService(
         mutateProblem(publish = true) { problem -> problem.copy(tests = problem.tests + TestCase()) }
     }
 
+    fun setTestCaseEnabled(id: Long, enabled: Boolean) {
+        mutateProblem(publish = true) { problem ->
+            problem.copy(
+                tests = problem.tests.map { testCase ->
+                    if (testCase.id == id) testCase.copy(enabled = enabled) else testCase
+                },
+            )
+        }
+    }
+
+    /** Copies the stdout of the last run into the expected output and marks that run as accepted. */
+    fun setExpectedFromResult(id: Long) {
+        val updated = synchronized(stateLock) {
+            val problem = state.problem ?: return
+            val result = state.results[id] ?: return
+            if (state.phase != RunPhase.IDLE || problem.tests.none { it.id == id }) {
+                return
+            }
+            val changed = problem.copy(
+                tests = problem.tests.map { if (it.id == id) it.copy(output = result.stdout) else it },
+            )
+            state = state.copy(
+                problem = changed,
+                results = state.results + (id to result.copy(verdict = Verdict.ACCEPTED, differences = emptyList())),
+                statusMessage = "Expected output was set from the last run.",
+            )
+            changed to state
+        }
+        saveLatest(updated.first)
+        notifyListeners(updated.second)
+    }
+
     fun deleteTestCase(id: Long) {
         mutateProblem(publish = true) { problem ->
             val remaining = problem.tests.filterNot { it.id == id }
@@ -230,6 +265,84 @@ class CphProjectService(
             publish = publish,
             statusMessage = if (normalized == null) "Custom checker disabled." else "Custom checker enabled.",
         ) { problem -> problem.copy(customCheckerPath = normalized) }
+    }
+
+    fun setStressFiles(generatorPath: String, brutePath: String) {
+        mutateProblem(publish = false, statusMessage = "Stress test files saved.") { problem ->
+            problem.copy(
+                stressGeneratorPath = generatorPath.trim().ifBlank { null },
+                stressBrutePath = brutePath.trim().ifBlank { null },
+            )
+        }
+    }
+
+    fun runStress(iterations: Int) {
+        val problem = state.problem ?: return
+        val generator = problem.stressGeneratorPath
+        val brute = problem.stressBrutePath
+        if (generator.isNullOrBlank() || brute.isNullOrBlank()) {
+            updateState { it.copy(statusMessage = "Choose a generator and a brute force solution first.") }
+            return
+        }
+        persistTestCases()
+        documentSaveCoordinator.saveThen { startStress(iterations.coerceIn(1, MAX_STRESS_ITERATIONS)) }
+    }
+
+    private fun startStress(iterations: Int) {
+        val prepared = synchronized(stateLock) {
+            if (runJob?.isActive == true || state.phase != RunPhase.IDLE) {
+                return
+            }
+            val problem = state.problem ?: return
+            val judgeRun = judgeEngine.prepareRun()
+            state = state.copy(
+                phase = RunPhase.RUNNING,
+                compileOutput = "",
+                statusMessage = "Preparing stress test...",
+            )
+            PreparedRun(problem, judgeRun, state)
+        }
+        notifyListeners(prepared.state)
+
+        runJob = coroutineScope.launch(Dispatchers.IO) {
+            val problem = prepared.problem
+            runCatching {
+                val config = StressConfig(
+                    solutionPath = Path.of(problem.sourcePath),
+                    generatorPath = Path.of(problem.stressGeneratorPath.orEmpty().trim()),
+                    brutePath = Path.of(problem.stressBrutePath.orEmpty().trim()),
+                    iterations = iterations,
+                )
+                val outcome = judgeEngine.stress(
+                    run = prepared.judgeRun,
+                    config = config,
+                    settings = service<CphSettings>().snapshot(),
+                    onProgress = { message -> updateStateFor(problem) { it.copy(statusMessage = message) } },
+                )
+                val message = when (outcome) {
+                    is StressOutcome.Passed -> "Stress test passed ${outcome.iterations} iteration(s)."
+                    is StressOutcome.Cancelled -> "Stress test cancelled."
+                    is StressOutcome.Error -> "Stress test failed: ${outcome.message}"
+                    is StressOutcome.Failed -> {
+                        updateStateFor(problem) { current ->
+                            val tests = current.problem?.tests.orEmpty() +
+                                TestCase(input = outcome.input, output = outcome.expectedOutput)
+                            current.copy(problem = current.problem?.copy(tests = tests), results = emptyMap())
+                        }
+                        saveLatest(problem)
+                        "Stress test found ${outcome.verdict.label} at iteration ${outcome.iteration}; " +
+                            "the failing input was added as a testcase."
+                    }
+                }
+                updateStateFor(problem) { it.copy(phase = RunPhase.IDLE, statusMessage = message) }
+            }.onFailure { error ->
+                updateStateFor(problem) {
+                    it.copy(phase = RunPhase.IDLE, statusMessage = "Stress test failed: ${error.message}")
+                }
+            }
+            runJob = null
+            reloadActiveFileAfterOperation()
+        }
     }
 
     fun setOnlineJudge(enabled: Boolean) {
@@ -620,6 +733,7 @@ class CphProjectService(
     companion object {
         const val TOOL_WINDOW_ID = "CPH"
         private const val MAX_TEST_CASES = 1_000
+        private const val MAX_STRESS_ITERATIONS = 100_000
         private const val KATTIS_SUBMISSION_TIMEOUT_MS = 120_000L
     }
 

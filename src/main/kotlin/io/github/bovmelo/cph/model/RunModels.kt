@@ -41,6 +41,7 @@ data class TestRunResult(
     val stderr: String = "",
     val exitCode: Int? = null,
     val durationMs: Long = 0,
+    val peakMemoryKb: Long? = null,
     val differences: List<LineDifference> = emptyList(),
     val checkerStdout: String = "",
     val checkerStderr: String = "",

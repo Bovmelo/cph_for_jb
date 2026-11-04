@@ -16,6 +16,8 @@ data class Problem(
     @SerialName("srcPath") val sourcePath: String,
     val local: Boolean = false,
     val customCheckerPath: String? = null,
+    val stressGeneratorPath: String? = null,
+    val stressBrutePath: String? = null,
     val languageId: String? = null,
 )
 
@@ -24,6 +26,8 @@ data class TestCase(
     val input: String = "",
     val output: String = "",
     val id: Long = TestCaseIds.next(),
+    // Disabled cases are skipped by Run Testcases but still run when selected individually.
+    val enabled: Boolean = true,
 )
 
 object TestCaseIds {
