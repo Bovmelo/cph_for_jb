@@ -9,16 +9,12 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.wm.IdeFocusManager
-import io.github.bovmelo.cph.model.LanguageId
-import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.project.CphProjectService
 import io.github.bovmelo.cph.settings.CphSettings
-import io.github.bovmelo.cph.submission.CodeforcesSubmitQueue
 
 @Service(Service.Level.APP)
 class CompanionServerService : Disposable {
     private val lock = Any()
-    private val submitQueue = CodeforcesSubmitQueue()
     private var server: CompanionHttpServer? = null
 
     fun ensureStarted() {
@@ -30,16 +26,12 @@ class CompanionServerService : Disposable {
             try {
                 val newServer = CompanionHttpServer(
                     requestedPort = port,
-                    submitQueue = submitQueue,
                     onProblem = { payload ->
                         val project = targetProject() ?: throw CompanionRequestException(
                             statusCode = 409,
                             clientMessage = "Open a JetBrains project first",
                         )
                         project.service<CphProjectService>().importProblem(payload)
-                    },
-                    onSubmissionDelivered = {
-                        targetProject()?.service<CphProjectService>()?.submissionDelivered()
                     },
                     onError = { error -> LOG.warn("Competitive Companion request failed", error) },
                 )
@@ -57,13 +49,6 @@ class CompanionServerService : Disposable {
             }
         }
     }
-
-    fun queueCodeforcesSubmission(problem: Problem, sourceCode: String, languageId: LanguageId): Boolean {
-        val response = submitQueue.prepare(problem, sourceCode, languageId)
-        return submitQueue.offer(response)
-    }
-
-    fun hasPendingSubmission(): Boolean = submitQueue.peek() != null
 
     fun restart() {
         synchronized(lock) {

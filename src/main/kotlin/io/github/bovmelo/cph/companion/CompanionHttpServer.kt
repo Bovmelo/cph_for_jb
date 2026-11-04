@@ -4,9 +4,6 @@ import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import io.github.bovmelo.cph.model.CompanionProblemPayload
 import io.github.bovmelo.cph.model.CphJson
-import io.github.bovmelo.cph.submission.CodeforcesSubmitQueue
-import io.github.bovmelo.cph.submission.CodeforcesSubmitResponse
-import io.github.bovmelo.cph.submission.EmptySubmitResponse
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonPrimitive
@@ -20,9 +17,7 @@ import java.util.concurrent.Executors
 
 class CompanionHttpServer(
     private val requestedPort: Int,
-    private val submitQueue: CodeforcesSubmitQueue,
     private val onProblem: (CompanionProblemPayload) -> Unit,
-    private val onSubmissionDelivered: (CodeforcesSubmitResponse) -> Unit = {},
     private val onError: (Throwable) -> Unit = {},
 ) : AutoCloseable {
     private val lock = Any()
@@ -68,27 +63,6 @@ class CompanionHttpServer(
                 return
             }
 
-            val isSubmitPoll = exchange.requestHeaders.getFirst(SUBMIT_HEADER).equals("true", ignoreCase = true)
-            if (isSubmitPoll) {
-                if (exchange.requestURI.path !in SUBMIT_PATHS) {
-                    sendError(exchange, 404, "Not found")
-                    return
-                }
-                if (
-                    !exchange.requestMethod.equals("POST", ignoreCase = true) &&
-                    !exchange.requestMethod.equals("GET", ignoreCase = true)
-                ) {
-                    sendError(exchange, 405, "Method not allowed")
-                    return
-                }
-                val submission = submitQueue.poll()
-                val response = submission?.let(CphJson.format::encodeToString)
-                    ?: CphJson.format.encodeToString(EmptySubmitResponse())
-                send(exchange, 200, response)
-                submission?.let(onSubmissionDelivered)
-                return
-            }
-
             if (exchange.requestURI.path != "/") {
                 sendError(exchange, 404, "Not found")
                 return
@@ -102,7 +76,7 @@ class CompanionHttpServer(
             val payload = CphJson.format.decodeFromString<CompanionProblemPayload>(readLimited(exchange))
             validate(payload)
             onProblem(payload)
-            send(exchange, 200, CphJson.format.encodeToString(EmptySubmitResponse()))
+            send(exchange, 200, "{}")
         } catch (_: PayloadTooLargeException) {
             sendError(exchange, 413, "Payload too large")
         } catch (error: CompanionRequestException) {
@@ -164,7 +138,7 @@ class CompanionHttpServer(
 
     private fun addResponseHeaders(exchange: HttpExchange) {
         exchange.responseHeaders.add("Access-Control-Allow-Origin", "*")
-        exchange.responseHeaders.add("Access-Control-Allow-Headers", "Content-Type, $SUBMIT_HEADER")
+        exchange.responseHeaders.add("Access-Control-Allow-Headers", "Content-Type")
         exchange.responseHeaders.add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         exchange.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
         exchange.responseHeaders.add("Cache-Control", "no-store")
@@ -189,8 +163,6 @@ class CompanionHttpServer(
 
     companion object {
         private const val LOOPBACK_ADDRESS = "127.0.0.1"
-        private const val SUBMIT_HEADER = "cph-submit"
-        private val SUBMIT_PATHS = setOf("/", "/getSubmit")
         private const val MAX_REQUEST_BYTES = 2 * 1024 * 1024
         private const val MAX_TEST_CASES = 1_000
         private const val MAX_NAME_LENGTH = 1_000

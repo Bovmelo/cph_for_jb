@@ -5,7 +5,6 @@ enum class RunPhase {
     COMPILING,
     RUNNING,
     CHECKING,
-    SUBMITTING,
     CANCELLING,
 }
 
@@ -52,6 +51,5 @@ data class CphUiState(
     val phase: RunPhase = RunPhase.IDLE,
     val results: Map<Long, TestRunResult> = emptyMap(),
     val compileOutput: String = "",
-    val submissionOutput: String = "",
     val statusMessage: String = "Open a supported file or import a problem with Competitive Companion.",
 )

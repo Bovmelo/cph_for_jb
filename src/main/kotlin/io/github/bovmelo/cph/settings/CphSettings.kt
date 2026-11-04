@@ -24,6 +24,8 @@ class CphSettings : PersistentStateComponent<CphSettings.StoredState> {
         compileTimeoutMs = storedState.compileTimeoutMs,
         failOnStderr = storedState.failOnStderr,
         onlineJudge = storedState.onlineJudge,
+        optimizeO2 = storedState.optimizeO2,
+        sanitizers = storedState.sanitizers,
         autoLoadActiveFile = storedState.autoLoadActiveFile,
         problemDirectory = storedState.problemDirectory,
         templatePath = storedState.templatePath,
@@ -46,6 +48,8 @@ class CphSettings : PersistentStateComponent<CphSettings.StoredState> {
             it.compileTimeoutMs = snapshot.compileTimeoutMs
             it.failOnStderr = snapshot.failOnStderr
             it.onlineJudge = snapshot.onlineJudge
+            it.optimizeO2 = snapshot.optimizeO2
+            it.sanitizers = snapshot.sanitizers
             it.autoLoadActiveFile = snapshot.autoLoadActiveFile
             it.problemDirectory = snapshot.problemDirectory
             it.templatePath = snapshot.templatePath
@@ -65,6 +69,8 @@ class CphSettings : PersistentStateComponent<CphSettings.StoredState> {
         var compileTimeoutMs: Long = 60_000
         var failOnStderr: Boolean = true
         var onlineJudge: Boolean = false
+        var optimizeO2: Boolean = true
+        var sanitizers: Boolean = false
         var autoLoadActiveFile: Boolean = true
         var problemDirectory: String = ""
         var templatePath: String = ""

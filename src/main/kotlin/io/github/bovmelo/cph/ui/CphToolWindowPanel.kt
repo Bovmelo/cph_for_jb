@@ -34,8 +34,6 @@ import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.model.RunPhase
 import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.project.CphProjectService
-import io.github.bovmelo.cph.submission.isCodeforcesUrl
-import io.github.bovmelo.cph.submission.isKattisUrl
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Dimension
@@ -104,7 +102,6 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
     }
 
     private val compileBanner = OutputBanner("Compiler output")
-    private val submissionBanner = OutputBanner("Submission output")
     private val rowsColumn = ScrollableColumn().apply { layout = VerticalLayout(0) }
     private val emptyState = createEmptyState()
     private val cards = CardLayout()
@@ -246,14 +243,14 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             .enabledWhen { hasProblem() && isIdle() },
         Separator.getInstance(),
         flag("Define ONLINE_JUDGE", isOn = { service.isOnlineJudgeEnabled() }) { service.setOnlineJudge(it) },
+        flag("Compile with -O2 (C/C++)", isOn = { service.isOptimizeO2Enabled() }) { service.setOptimizeO2(it) },
+        flag("Compile with -fsanitize=address,undefined (C/C++)", isOn = { service.isSanitizersEnabled() }) {
+            service.setSanitizers(it)
+        },
         flag("Use a custom checker", isOn = { !currentProblem()?.customCheckerPath.isNullOrBlank() }) { on ->
             if (on) chooseCheckerFile() else service.setCustomCheckerPath("")
         }.enabledWhen { hasProblem() && isIdle() },
         Separator.getInstance(),
-        action("Submit to Codeforces", null, null) { service.prepareCodeforcesSubmission() }
-            .enabledWhen { currentProblem()?.url?.let(::isCodeforcesUrl) == true && isIdle() },
-        action("Submit to Kattis…", null, null) { confirmKattisSubmission() }
-            .enabledWhen { currentProblem()?.url?.let(::isKattisUrl) == true && isIdle() },
         Separator.getInstance(),
         action("Clear all testcases…", null, null) { confirmClearCases() }
             .enabledWhen { hasProblem() && isIdle() },
@@ -307,7 +304,6 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             text = state.compileOutput,
             isError = state.results.values.any { it.verdict == Verdict.COMPILATION_ERROR },
         )
-        submissionBanner.show(text = state.submissionOutput, isError = false)
         reconcileRows(problem, state, idle)
         revalidate()
         repaint()
@@ -386,7 +382,7 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
             row.setExpanded(testCase.id in expandedIds, notify = false)
         }
 
-        val ordered = listOf<JComponent>(compileBanner, submissionBanner) + problem.tests.mapNotNull { rows[it.id] }
+        val ordered = listOf<JComponent>(compileBanner) + problem.tests.mapNotNull { rows[it.id] }
         val current = rowsColumn.components.toList()
         if (current != ordered) {
             rowsColumn.removeAll()
@@ -495,19 +491,6 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
-    private fun confirmKattisSubmission() {
-        if (
-            Messages.showYesNoDialog(
-                project,
-                "Run the local Kattis submission client for this source file? This may create a real submission.",
-                "Submit to Kattis",
-                Messages.getQuestionIcon(),
-            ) == Messages.YES
-        ) {
-            service.submitToKattis()
-        }
-    }
-
     private fun initialDirectory(): Path = project.basePath?.let(Path::of)
         ?: Path.of(System.getProperty("user.dir"))
 
@@ -562,7 +545,7 @@ internal class PanelFlag(
     override fun setSelected(event: AnActionEvent, state: Boolean) = change(state)
 }
 
-/** A collapsible block for compiler or submission output, tinted red when it holds an error. */
+/** A collapsible block for compiler output, tinted red when it holds an error. */
 internal class OutputBanner(private val title: String) : JPanel(VerticalLayout(JBUI.scale(4))) {
     private val toggle = ActionLink(title) { setOpen(!open) }
     private val area = DataArea(editable = false, emptyText = "")

@@ -16,6 +16,8 @@ data class CphSettingsSnapshot(
     val compileTimeoutMs: Long = 60_000,
     val failOnStderr: Boolean = true,
     val onlineJudge: Boolean = false,
+    val optimizeO2: Boolean = true,
+    val sanitizers: Boolean = false,
     val autoLoadActiveFile: Boolean = true,
     val problemDirectory: String = "",
     val templatePath: String = "",

@@ -31,7 +31,6 @@ These instructions apply to the entire repository.
 - `src/main/kotlin/io/github/bovmelo/cph/persistence`: `.cph` metadata storage.
 - `src/main/kotlin/io/github/bovmelo/cph/companion`: Competitive Companion listener and import flow.
 - `src/main/kotlin/io/github/bovmelo/cph/judge`: language adapters, process execution, comparison, and verdicts.
-- `src/main/kotlin/io/github/bovmelo/cph/submission`: cph-submit and Kattis submission boundaries.
 - `src/main/kotlin/io/github/bovmelo/cph/ui`: native tool window UI.
 - `src/test/kotlin`: unit tests for behavior that does not require a running IDE.
 

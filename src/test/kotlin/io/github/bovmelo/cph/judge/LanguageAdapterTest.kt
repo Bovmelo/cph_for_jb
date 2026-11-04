@@ -81,4 +81,19 @@ class LanguageAdapterTest {
         assertTrue(plan.compile!!.arguments.contains("-DONLINE_JUDGE"))
         assertEquals("true", plan.run.environment["ONLINE_JUDGE"])
     }
+
+    @Test
+    fun `native optimization and sanitizer flags follow settings`() {
+        val source = Path.of("/work/a.cpp")
+        val defaults = CppLanguageAdapter.plan(source, buildDirectory, settings).compile!!.arguments
+        assertTrue("-O2" in defaults)
+        assertTrue(defaults.none { it.startsWith("-fsanitize") })
+
+        val custom = settings.copy(optimizeO2 = false, sanitizers = true)
+        val cppArguments = CppLanguageAdapter.plan(source, buildDirectory, custom).compile!!.arguments
+        assertTrue("-O2" !in cppArguments)
+        assertTrue("-fsanitize=address,undefined" in cppArguments)
+        val cArguments = CLanguageAdapter.plan(Path.of("/work/a.c"), buildDirectory, custom).compile!!.arguments
+        assertTrue("-fsanitize=address,undefined" in cArguments)
+    }
 }

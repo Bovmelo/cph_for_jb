@@ -27,6 +27,8 @@ class CphSettingsConfigurable : Configurable {
     private val compileTimeout = JSpinner(SpinnerNumberModel(60_000L, 1_000L, 600_000L, 1_000L))
     private val failOnStderr = JBCheckBox("Treat stderr output as a runtime error")
     private val onlineJudge = JBCheckBox("Define ONLINE_JUDGE for solution processes")
+    private val optimizeO2 = JBCheckBox("Compile C/C++ with -O2")
+    private val sanitizers = JBCheckBox("Compile C/C++ with -fsanitize=address,undefined")
     private val autoLoadActiveFile = JBCheckBox("Load testcases when the active editor changes")
     private val problemDirectory = JBTextField()
     private val templatePath = JBTextField()
@@ -75,6 +77,8 @@ class CphSettingsConfigurable : Configurable {
                     }
                     row { cell(failOnStderr) }
                     row { cell(onlineJudge) }
+                    row { cell(optimizeO2) }
+                    row { cell(sanitizers) }
                 }
                 group("Competitive Companion") {
                     row("Port:") {
@@ -123,6 +127,8 @@ class CphSettingsConfigurable : Configurable {
         compileTimeout.value = settings.compileTimeoutMs
         failOnStderr.isSelected = settings.failOnStderr
         onlineJudge.isSelected = settings.onlineJudge
+        optimizeO2.isSelected = settings.optimizeO2
+        sanitizers.isSelected = settings.sanitizers
         autoLoadActiveFile.isSelected = settings.autoLoadActiveFile
         problemDirectory.text = settings.problemDirectory
         templatePath.text = settings.templatePath
@@ -153,6 +159,8 @@ class CphSettingsConfigurable : Configurable {
         compileTimeoutMs = (compileTimeout.value as Number).toLong(),
         failOnStderr = failOnStderr.isSelected,
         onlineJudge = onlineJudge.isSelected,
+        optimizeO2 = optimizeO2.isSelected,
+        sanitizers = sanitizers.isSelected,
         autoLoadActiveFile = autoLoadActiveFile.isSelected,
         problemDirectory = problemDirectory.text.trim(),
         templatePath = templatePath.text.trim(),

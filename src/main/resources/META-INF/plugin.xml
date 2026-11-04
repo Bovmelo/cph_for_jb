@@ -10,7 +10,6 @@
             <li>Kotlin-first support plus the full CPH language matrix.</li>
             <li>Timeouts, cancellation, output differences, and Python custom checkers.</li>
             <li>Portable testcase JSON and CPH-compatible metadata.</li>
-            <li>cph-submit and confirmed Kattis submission integration.</li>
         </ul>
     ]]></description>
 

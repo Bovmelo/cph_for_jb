@@ -91,8 +91,8 @@ object CppLanguageAdapter : LanguageAdapter {
             sourcePath = sourcePath,
             buildDirectory = buildDirectory,
             settings = settings,
-            defaultArguments = listOf("-std=c++20", "-O2", "-pipe", "-DDEBUG", "-DCPH") +
-                onlineJudgeDefine(settings),
+            defaultArguments = listOf("-std=c++20", "-pipe", "-DDEBUG", "-DCPH") +
+                nativeOptimizationFlags(settings) + onlineJudgeDefine(settings),
         )
 }
 
@@ -105,7 +105,8 @@ object CLanguageAdapter : LanguageAdapter {
             sourcePath = sourcePath,
             buildDirectory = buildDirectory,
             settings = settings,
-            defaultArguments = listOf("-O2", "-pipe", "-DDEBUG", "-DCPH") + onlineJudgeDefine(settings),
+            defaultArguments = listOf("-pipe", "-DDEBUG", "-DCPH") +
+                nativeOptimizationFlags(settings) + onlineJudgeDefine(settings),
         )
 }
 
@@ -407,6 +408,11 @@ private fun CphSettingsSnapshot.requiredToolchain(languageId: LanguageId): Langu
 
 private fun onlineJudgeDefine(settings: CphSettingsSnapshot): List<String> =
     if (settings.onlineJudge) listOf("-DONLINE_JUDGE") else emptyList()
+
+// Sanitizer flags apply to compile and link in one gcc/g++ invocation; -g gives readable reports.
+private fun nativeOptimizationFlags(settings: CphSettingsSnapshot): List<String> =
+    (if (settings.optimizeO2) listOf("-O2") else emptyList()) +
+        (if (settings.sanitizers) listOf("-g", "-fsanitize=address,undefined") else emptyList())
 
 private fun platformExecutableName(): String = if (isWindows()) "solution.exe" else "solution"
 

@@ -32,7 +32,6 @@ import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.persistence.ProblemStore
 import io.github.bovmelo.cph.persistence.TestCaseExchange
 import io.github.bovmelo.cph.settings.CphSettings
-import io.github.bovmelo.cph.submission.KattisSubmission
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -56,8 +55,6 @@ class CphProjectService(
     private val store = ProblemStore()
     private val templateEngine = TemplateEngine()
     private val judgeEngine = JudgeEngine()
-    private val submissionRunner = ProcessRunner()
-    private val submissionCancellation = AtomicBoolean(false)
     private val saveMutex = Mutex()
     private val documentSaveCoordinator = DocumentSaveCoordinator(
         scheduleWithWriteIntent = { operation ->
@@ -353,6 +350,24 @@ class CphProjectService(
         }
     }
 
+    fun setOptimizeO2(enabled: Boolean) {
+        val settings = service<CphSettings>()
+        settings.update(settings.snapshot().copy(optimizeO2 = enabled))
+        updateState { it.copy(statusMessage = if (enabled) "-O2 enabled." else "-O2 disabled.") }
+    }
+
+    fun isOptimizeO2Enabled(): Boolean = service<CphSettings>().snapshot().optimizeO2
+
+    fun setSanitizers(enabled: Boolean) {
+        val settings = service<CphSettings>()
+        settings.update(settings.snapshot().copy(sanitizers = enabled))
+        updateState {
+            it.copy(statusMessage = if (enabled) "Sanitizers enabled." else "Sanitizers disabled.")
+        }
+    }
+
+    fun isSanitizersEnabled(): Boolean = service<CphSettings>().snapshot().sanitizers
+
     fun isOnlineJudgeEnabled(): Boolean = service<CphSettings>().snapshot().onlineJudge
 
     fun hasSupportedActiveFile(): Boolean = activeSourcePath()?.let(LanguageId::fromPath) != null
@@ -379,108 +394,11 @@ class CphProjectService(
         runCases(selectedCaseIds = setOf(id))
     }
 
-    fun prepareCodeforcesSubmission() {
-        documentSaveCoordinator.saveThen(::prepareCodeforcesSubmissionAfterSave)
-    }
-
-    private fun prepareCodeforcesSubmissionAfterSave() {
-        val problem = state.problem ?: return
-        coroutineScope.launch(Dispatchers.IO) {
-            runCatching {
-                val sourcePath = Path.of(problem.sourcePath).toAbsolutePath().normalize()
-                val language = requireNotNull(LanguageId.fromPath(sourcePath)) { "Unsupported source language." }
-                val sourceCode = Files.readString(sourcePath, StandardCharsets.UTF_8)
-                val serverService = service<CompanionServerService>()
-                serverService.ensureStarted()
-                val replaced = serverService.queueCodeforcesSubmission(problem, sourceCode, language)
-                updateStateFor(problem) {
-                    it.copy(
-                        statusMessage = if (replaced) {
-                            "Replaced the pending Codeforces submission. Waiting for cph-submit."
-                        } else {
-                            "Waiting for the cph-submit browser extension."
-                        },
-                    )
-                }
-            }.onFailure { error ->
-                updateStateFor(problem) { it.copy(statusMessage = "Could not prepare Codeforces submission: ${error.message}") }
-            }
-        }
-    }
-
-    fun submissionDelivered() {
-        val problem = state.problem ?: return
-        updateStateFor(problem) { it.copy(statusMessage = "Source code was delivered to cph-submit.") }
-    }
-
-    fun submitToKattis() {
-        documentSaveCoordinator.saveThen(::submitToKattisAfterSave)
-    }
-
-    private fun submitToKattisAfterSave() {
-        val problem = synchronized(stateLock) {
-            if (state.phase != RunPhase.IDLE || runJob?.isActive == true) {
-                return
-            }
-            val currentProblem = state.problem ?: return
-            submissionCancellation.set(false)
-            state = state.copy(
-                phase = RunPhase.SUBMITTING,
-                submissionOutput = "",
-                statusMessage = "Starting Kattis submission client...",
-            )
-            currentProblem
-        }
-        notifyListeners(state)
-
-        runJob = coroutineScope.launch(Dispatchers.IO) {
-            runCatching {
-                val settings = service<CphSettings>().snapshot()
-                val sourcePath = Path.of(problem.sourcePath).toAbsolutePath().normalize()
-                val home = System.getProperty("user.home")?.let(Path::of)
-                    ?: error("The user home directory is unavailable.")
-                val plan = KattisSubmission.plan(
-                    problem = problem,
-                    sourcePath = sourcePath,
-                    userHome = home,
-                    pythonCommand = settings.toolchain(LanguageId.PYTHON).runCommand,
-                )
-                val result = submissionRunner.run(
-                    command = plan.command,
-                    stdin = plan.stdin,
-                    timeoutMs = KATTIS_SUBMISSION_TIMEOUT_MS,
-                    cancellationRequested = submissionCancellation::get,
-                )
-                val output = listOf(result.stdout, result.stderr).filter(String::isNotBlank).joinToString("\n")
-                val message = when {
-                    result.cancelled -> "Kattis submission cancelled."
-                    result.timedOut -> "Kattis submission client timed out."
-                    result.launchError -> "Could not start the Kattis submission client."
-                    result.outputLimitExceeded -> "Kattis submission client output exceeded the 4 MiB limit."
-                    result.exitCode == 0 -> "Kattis submission client finished successfully."
-                    else -> "Kattis submission client exited with code ${result.exitCode}."
-                }
-                updateStateFor(problem) {
-                    it.copy(phase = RunPhase.IDLE, submissionOutput = output, statusMessage = message)
-                }
-            }.onFailure { error ->
-                updateStateFor(problem) {
-                    it.copy(phase = RunPhase.IDLE, statusMessage = "Kattis submission failed: ${error.message}")
-                }
-            }
-            runJob = null
-            reloadActiveFileAfterOperation()
-        }
-    }
-
     fun stop() {
         if (state.phase == RunPhase.IDLE) {
             return
         }
         updateState { it.copy(phase = RunPhase.CANCELLING, statusMessage = "Stopping current process...") }
-        if (runJob?.isActive == true && submissionCancellation.compareAndSet(false, true)) {
-            submissionRunner.cancel()
-        }
         judgeEngine.cancel()
     }
 
@@ -734,7 +652,6 @@ class CphProjectService(
         const val TOOL_WINDOW_ID = "CPH"
         private const val MAX_TEST_CASES = 1_000
         private const val MAX_STRESS_ITERATIONS = 100_000
-        private const val KATTIS_SUBMISSION_TIMEOUT_MS = 120_000L
     }
 
     private data class PreparedRun(

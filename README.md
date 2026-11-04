@@ -17,8 +17,6 @@ Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform�
 - 每个用例可单独启用/禁用：禁用的用例会被 Run Testcases 跳过，但仍可单独运行。
 - 对拍（Stress Test）：选择生成器和暴力解，自动循环比对；发现差异后，把触发用例（输入 + 暴力解输出）加入用例列表。
 - 支持 Python 自定义 checker（Special Judge）。checker 通过临时输入/输出文件获得数据，并用退出码决定结果。
-- 兼容最新版 cph-submit 的 `GET /getSubmit` 轮询协议，可把 Codeforces 源码一次性安全交付给浏览器扩展。
-- 支持本机 Kattis `submit.py` 客户端，并在真实提交前要求用户确认。
 - 编辑器切换时自动加载已有用例；`Ctrl+Alt+B` 可创建本地题目或运行当前源码。
 - 所有编译器、解释器、额外参数、时限、模板、导入目录和 `ONLINE_JUDGE` 均可配置。
 
@@ -92,16 +90,6 @@ python3 checker.py <input-file> <actual-output-file>
   }
 ]
 ```
-
-## 提交
-
-### Codeforces
-
-安装 [cph-submit](https://github.com/agrawal-d/cph-submit)，打开 Codeforces 题目后点击 **Submit CF**。源码仅保存在内存中的单元素队列里，并在浏览器扩展第一次成功轮询后清除。插件不保存 Codeforces 凭据。
-
-### Kattis
-
-按原版 CPH 的约定，将 `.kattisrc` 和 `submit.py` 放在用户目录的 `.kattis` 文件夹内。点击 **Submit Kattis** 后，插件会先显示确认对话框，再通过配置的 Python 解释器运行本机客户端。插件不读取或保存凭据内容。
 
 ## 数据与安全边界
 
