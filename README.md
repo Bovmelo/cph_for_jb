@@ -17,6 +17,7 @@ Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform�
 - 用例的 Input 可以改为选择一个文件：界面只显示文件路径，运行时以流的方式交给程序的 stdin，不读入内存，也没有大小限制。使用输入文件的用例不能导出为 JSON。
 - 每个用例可单独启用/禁用：禁用的用例会被 Run Testcases 跳过，但仍可单独运行。
 - 对拍（Stress Test）：选择生成器和暴力解，自动循环比对；发现差异后，把触发用例（输入 + 暴力解输出）加入用例列表。
+- 一键加题（Add problem）：输入题号后按当前 IDE 创建对应语言的空源码文件并加载为本地题目（不写入内置模板；只有在设置里为该语言配置了模板文件时才使用它）。CLion 创建 `<题号>.cpp`，在项目根目录的 `CMakeLists.txt` 末尾追加 `add_executable`，并请求重新加载 CMake、选中同名的运行配置；IntelliJ IDEA 可选 Kotlin 或 Java，PyCharm 创建 Python，GoLand、RustRover、RubyMine、WebStorm、Rider 分别创建 Go、Rust、Ruby、JavaScript、C#，其他 IDE 使用设置里的默认语言。
 - 支持 Python 自定义 checker（Special Judge）。checker 通过临时输入/输出文件获得数据，并用退出码决定结果。
 - 编辑器切换时自动加载已有用例；`Ctrl+Alt+B` 可创建本地题目或运行当前源码。
 - 所有编译器、解释器、额外参数、时限、模板、导入目录和 `ONLINE_JUDGE` 均可配置。

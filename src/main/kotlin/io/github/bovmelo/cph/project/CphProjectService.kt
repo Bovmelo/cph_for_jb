@@ -1,6 +1,16 @@
 package io.github.bovmelo.cph.project
 
+import com.intellij.execution.RunManager
+import com.intellij.execution.RunManagerListener
+import com.intellij.execution.RunnerAndConfigurationSettings
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionPlaces
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.ex.ActionUtil
+import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.ScrollType
@@ -11,6 +21,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.wm.ToolWindowManager
+import io.github.bovmelo.cph.cmake.CMakeTargets
 import io.github.bovmelo.cph.companion.CompanionServerService
 import io.github.bovmelo.cph.companion.ProblemNaming
 import io.github.bovmelo.cph.companion.TemplateEngine
@@ -32,18 +43,24 @@ import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.persistence.ProblemStore
 import io.github.bovmelo.cph.persistence.TestCaseExchange
 import io.github.bovmelo.cph.settings.CphSettings
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import java.nio.charset.StandardCharsets
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.Duration.Companion.seconds
 
 @Service(Service.Level.PROJECT)
 class CphProjectService(
@@ -120,6 +137,270 @@ class CphProjectService(
                 openSource(sourcePath, cursorOffset)
             }.onFailure { error ->
                 updateState { it.copy(phase = RunPhase.IDLE, statusMessage = "Import failed: ${error.message}") }
+            }
+        }
+    }
+
+    /**
+     * Creates `<name>.<extension>` and opens it as a local problem. The file starts empty unless the user
+     * configured a template for that language. A request with [NewProblemRequest.cmakeTarget] also registers
+     * the file with `add_executable` in the root CMakeLists.txt and selects the matching run target.
+     */
+    fun addProblem(request: NewProblemRequest) {
+        if (state.phase != RunPhase.IDLE) {
+            return
+        }
+        coroutineScope.launch(Dispatchers.IO) {
+            var createdSource: Path? = null
+            var complete = false
+            try {
+                val projectDirectory = project.basePath?.let(Path::of)?.toAbsolutePath()?.normalize()
+                    ?: error("The project has no local base directory.")
+                val cmakeFile = projectDirectory.resolve(CMAKE_FILE_NAME)
+                require(!request.cmakeTarget || Files.isRegularFile(cmakeFile)) {
+                    "No $CMAKE_FILE_NAME found in the project root."
+                }
+                val settings = service<CphSettings>().snapshot()
+                val destination = resolveProblemDirectory(projectDirectory, settings.problemDirectory)
+
+                val takenNames = takenProblemNames(projectDirectory, destination, request.language, request.cmakeTarget)
+                NewProblemRules.nameError(request, takenNames)?.let { error(it) }
+                val name = request.name
+                val sourcePath = destination.resolve("$name.${request.language.extension}").normalize()
+                require(sourcePath.startsWith(destination)) { "Generated source path escaped the problem directory." }
+
+                // No built-in boilerplate here; the configured template is written for the default language only.
+                val expanded = settings.templatePath
+                    .takeIf { it.isNotBlank() && settings.defaultLanguage == request.language }
+                    ?.let { templateEngine.expand(loadTemplate(it, request.language), CompanionProblemPayload(name = name), name) }
+                Files.createDirectories(sourcePath.parent)
+                try {
+                    Files.writeString(
+                        sourcePath,
+                        expanded?.content.orEmpty(),
+                        StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE_NEW,
+                    )
+                } catch (_: FileAlreadyExistsException) {
+                    // The exception's own message is just the path.
+                    error("${sourcePath.fileName} already exists.")
+                }
+                createdSource = sourcePath
+
+                // Metadata goes first: the source and metadata can be taken back, the CMake edit cannot.
+                val problem = LocalProblemFactory.create(sourcePath).also(store::save)
+                if (request.cmakeTarget) {
+                    appendCMakeTarget(cmakeFile, name, CMakeTargets.sourceReference(projectDirectory, sourcePath))
+                }
+                complete = true
+
+                val status = if (request.cmakeTarget) {
+                    "Added target $name to $CMAKE_FILE_NAME."
+                } else {
+                    "Created ${sourcePath.fileName}."
+                }
+                // A run that started while the files were being written keeps its state, or its process could
+                // no longer be stopped. The new problem then loads from its file once the run ends.
+                updateState { current ->
+                    if (current.phase == RunPhase.IDLE) CphUiState(problem = problem, statusMessage = status) else current
+                }
+                openSource(sourcePath, expanded?.cursorOffset)
+                if (request.cmakeTarget) {
+                    selectRunTarget(name, problem)
+                }
+            } catch (error: Exception) {
+                // A half-created problem would block a retry under the same name, so take it back entirely.
+                if (!complete) {
+                    createdSource?.let { source ->
+                        runCatching { store.delete(source) }
+                        runCatching { Files.deleteIfExists(source) }
+                    }
+                }
+                if (error is CancellationException) throw error
+                updateState { it.copy(statusMessage = "Could not add a problem: ${error.message}") }
+            }
+        }
+    }
+
+    /** Why a problem cannot be added to this project at all, or null. CMake targets need a root CMakeLists.txt. */
+    fun newProblemError(cmakeTarget: Boolean): String? {
+        val projectDirectory = project.basePath?.let(Path::of) ?: return "The project has no local base directory."
+        return if (cmakeTarget && !Files.isRegularFile(projectDirectory.resolve(CMAKE_FILE_NAME))) {
+            "No $CMAKE_FILE_NAME found in the project root."
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Names a new problem may not reuse: sources of [language] already in the problem directory, plus the
+     * CMake targets when the problem becomes one.
+     */
+    fun takenProblemNames(language: LanguageId, cmakeTarget: Boolean): Set<String> {
+        val projectDirectory = project.basePath?.let(Path::of)?.toAbsolutePath()?.normalize() ?: return emptySet()
+        val configured = service<CphSettings>().snapshot().problemDirectory
+        val destination = problemDirectoryPath(projectDirectory, configured)
+        // This feeds the dialog on the UI thread, where an unreadable CMakeLists.txt must not throw; creating
+        // the problem reads the file again and reports the failure in the status line.
+        return runCatching { takenProblemNames(projectDirectory, destination, language, cmakeTarget) }
+            .getOrDefault(emptySet())
+    }
+
+    private fun takenProblemNames(
+        projectDirectory: Path,
+        destination: Path,
+        language: LanguageId,
+        cmakeTarget: Boolean,
+    ): Set<String> {
+        val cmakeFile = projectDirectory.resolve(CMAKE_FILE_NAME)
+        val targets = if (cmakeTarget && Files.isRegularFile(cmakeFile)) {
+            CMakeTargets.declaredTargets(readCMakeText(cmakeFile))
+        } else {
+            emptySet()
+        }
+        return targets + sourceStems(destination, language)
+    }
+
+    private fun readCMakeText(cmakeFile: Path): String = ReadAction.compute<String, java.io.IOException> {
+        // An open editor may hold edits that are not on disk yet.
+        LocalFileSystem.getInstance().findFileByNioFile(cmakeFile)
+            ?.let { FileDocumentManager.getInstance().getCachedDocument(it)?.text }
+            ?: Files.readString(cmakeFile, StandardCharsets.UTF_8)
+    }
+
+    /** Only an existing source of the same language collides with a new problem; `B.in` must not block `B`. */
+    private fun sourceStems(directory: Path, language: LanguageId): Set<String> =
+        runCatching {
+            Files.list(directory).use { entries ->
+                entries.map { it.fileName.toString() }
+                    .filter { it.substringAfterLast('.', "").equals(language.extension, ignoreCase = true) }
+                    .map { it.substringBeforeLast('.') }
+                    .toList()
+                    .toSet()
+            }
+        }.getOrDefault(emptySet())
+
+    /** Edits through the document so unsaved editor changes survive and CLion sees an ordinary edit. */
+    private fun appendCMakeTarget(cmakeFile: Path, target: String, sourceReference: String) {
+        var failure: Throwable? = null
+        ApplicationManager.getApplication().invokeAndWait {
+            try {
+                val file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(cmakeFile)
+                    ?: error("Cannot open $cmakeFile.")
+                val documentManager = FileDocumentManager.getInstance()
+                val document = documentManager.getDocument(file) ?: error("Cannot read $cmakeFile.")
+                val before = document.text
+                check(target !in CMakeTargets.declaredTargets(before)) { "Target $target already exists." }
+                val addition = CMakeTargets.appendExecutable(before, target, sourceReference).substring(before.length)
+                WriteCommandAction.runWriteCommandAction(project, "Add CPH Problem Target", null, {
+                    document.insertString(before.length, addition)
+                })
+                documentManager.saveDocument(document)
+                // Saving reports I/O errors and vetoes by itself and returns normally, so ask whether it worked.
+                if (documentManager.isDocumentUnsaved(document)) {
+                    // CMake reads the file, not the editor. Take the line back rather than keep a target that
+                    // exists only in memory and names a source this failure is about to delete.
+                    WriteCommandAction.runWriteCommandAction(project, "Add CPH Problem Target", null, {
+                        if (document.text == before + addition) {
+                            document.deleteString(before.length, document.textLength)
+                        }
+                    })
+                    error("Could not save $CMAKE_FILE_NAME.")
+                }
+            } catch (error: Exception) {
+                failure = error
+            }
+        }
+        failure?.let { throw it }
+    }
+
+    /**
+     * Asks CLion to reload CMake so the new target gets its run configuration; editing inside the IDE does
+     * not trigger CLion's auto-reload. The action is looked up by id to keep the plugin free of CLion-only
+     * dependencies.
+     *
+     * While a project is still opening, CLion either throws from the action or drops the request silently,
+     * and its initial load may already have read the old file. So a request is retried while it throws and
+     * then repeated a few times in case it was dropped. The repeats are few and far apart because each one
+     * restarts a reload that is still running.
+     */
+    private suspend fun requestCMakeReloads(reload: AnAction, firstRequest: CompletableDeferred<Unit>) {
+        for (pause in listOf(0.seconds) + CMAKE_RELOAD_REPEAT_DELAYS) {
+            delay(pause)
+            while (!invokeCMakeReload(reload)) {
+                delay(CMAKE_RELOAD_RETRY_MILLIS)
+            }
+            firstRequest.complete(Unit)
+        }
+    }
+
+    /** False when the action threw, which CLion does while its CMake workspace is not ready. */
+    private suspend fun invokeCMakeReload(reload: AnAction): Boolean {
+        val accepted = CompletableDeferred<Boolean>()
+        ApplicationManager.getApplication().invokeLater {
+            accepted.complete(
+                project.isDisposed || runCatching {
+                    ActionUtil.invokeAction(
+                        reload,
+                        SimpleDataContext.getProjectContext(project),
+                        ActionPlaces.UNKNOWN,
+                        null,
+                        null,
+                    )
+                }.isSuccess,
+            )
+        }
+        return accepted.await()
+    }
+
+    /**
+     * CLion creates the run configuration for a new target when it reloads CMake, which can be later than the
+     * edit, so wait for it (or pick it now if it is already there).
+     */
+    private fun selectRunTarget(name: String, problem: Problem) {
+        // An IDE without CMake support never creates a run configuration for the target.
+        val reloadAction = ActionManager.getInstance().getAction(CMAKE_RELOAD_ACTION_ID) ?: return
+        coroutineScope.launch {
+            val found = CompletableDeferred<Unit>()
+            withTimeoutOrNull(RUN_TARGET_TIMEOUT_SECONDS.seconds) {
+                fun trySelect(): Boolean {
+                    // Only CLion's configuration for the target counts, not a shell script that shares its name.
+                    val configuration = RunManager.getInstance(project).allSettings
+                        .firstOrNull { it.name == name && it.type.id == CMAKE_RUN_CONFIGURATION_TYPE_ID }
+                        ?: return false
+                    ApplicationManager.getApplication().invokeLater {
+                        // A slow reload can finish after the user has moved on to another problem and target.
+                        if (!project.isDisposed && state.problem?.sourcePath == problem.sourcePath) {
+                            RunManager.getInstance(project).selectedConfiguration = configuration
+                        }
+                    }
+                    found.complete(Unit)
+                    return true
+                }
+                // The connection ends with this scope, so there is nothing to clean up after the timeout.
+                project.messageBus.connect(this).subscribe(
+                    RunManagerListener.TOPIC,
+                    object : RunManagerListener {
+                        override fun runConfigurationAdded(settings: RunnerAndConfigurationSettings) {
+                            if (settings.name == name) trySelect()
+                        }
+                    },
+                )
+                // The edit needs a reload even when a configuration of that name is left over from an earlier
+                // target, so the first request always goes out; the repeats stop once the target is there.
+                val firstRequest = CompletableDeferred<Unit>()
+                val reloads = launch { requestCMakeReloads(reloadAction, firstRequest) }
+                if (!trySelect()) {
+                    found.await()
+                }
+                firstRequest.await()
+                reloads.cancel()
+            }
+            if (!found.isCompleted) {
+                // By now the user may be working on another problem, whose status this must not replace.
+                updateStateFor(problem) {
+                    it.copy(statusMessage = "Target $name is not in the run configurations yet. Reload CMake, then select it.")
+                }
             }
         }
     }
@@ -567,9 +848,16 @@ class CphProjectService(
         if (configuredDirectory.isBlank()) {
             return projectDirectory
         }
+        return problemDirectoryPath(projectDirectory, configuredDirectory).also(Files::createDirectories)
+    }
+
+    private fun problemDirectoryPath(projectDirectory: Path, configuredDirectory: String): Path {
+        if (configuredDirectory.isBlank()) {
+            return projectDirectory
+        }
         val configured = Path.of(configuredDirectory)
         val resolved = if (configured.isAbsolute) configured else projectDirectory.resolve(configured)
-        return resolved.toAbsolutePath().normalize().also(Files::createDirectories)
+        return resolved.toAbsolutePath().normalize()
     }
 
     private fun loadTemplate(templatePath: String, language: LanguageId): String {
@@ -661,6 +949,12 @@ class CphProjectService(
 
     companion object {
         const val TOOL_WINDOW_ID = "CPH"
+        private const val CMAKE_FILE_NAME = "CMakeLists.txt"
+        private const val CMAKE_RELOAD_ACTION_ID = "CMake.ReloadCMakeProject"
+        private const val CMAKE_RELOAD_RETRY_MILLIS = 1_000L
+        private const val CMAKE_RUN_CONFIGURATION_TYPE_ID = "CMakeRunConfiguration"
+        private val CMAKE_RELOAD_REPEAT_DELAYS = listOf(5.seconds, 15.seconds)
+        private const val RUN_TARGET_TIMEOUT_SECONDS = 60
         private const val MAX_TEST_CASES = 1_000
         private const val MAX_STRESS_ITERATIONS = 100_000
     }

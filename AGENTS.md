@@ -28,7 +28,9 @@ These instructions apply to the entire repository.
 
 - `src/main/kotlin/io/github/bovmelo/cph/model`: protocol and domain models.
 - `src/main/kotlin/io/github/bovmelo/cph/persistence`: `.cph` metadata storage.
+- `src/main/kotlin/io/github/bovmelo/cph/cmake`: CMake target text editing for the one-click add-problem flow.
 - `src/main/kotlin/io/github/bovmelo/cph/companion`: Competitive Companion listener and import flow.
+- `src/main/kotlin/io/github/bovmelo/cph/project`: project service, plus the pure add-problem rules (IDE product code to language, name validation).
 - `src/main/kotlin/io/github/bovmelo/cph/judge`: language adapters, process execution, comparison, and verdicts.
 - `src/main/kotlin/io/github/bovmelo/cph/ui`: native tool window UI.
 - `src/test/kotlin`: unit tests for behavior that does not require a running IDE.

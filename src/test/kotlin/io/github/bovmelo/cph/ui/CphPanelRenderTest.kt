@@ -5,6 +5,7 @@ import com.intellij.testFramework.junit5.TestApplication
 import com.intellij.testFramework.junit5.fixture.projectFixture
 import com.intellij.util.ui.UIUtil
 import io.github.bovmelo.cph.model.CphUiState
+import io.github.bovmelo.cph.model.LanguageId
 import io.github.bovmelo.cph.model.LineDifference
 import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.model.RunPhase
@@ -109,6 +110,37 @@ class CphPanelRenderTest {
                 ImageIO.write(image, "png", File(directory, "settings.png"))
             }
             configurable.disposeUIResources()
+        }
+    }
+
+    @Test
+    fun `renders the add problem dialog with a language choice`() {
+        SwingUtilities.invokeAndWait {
+            val dialog = AddProblemDialog(
+                project = project.get(),
+                languages = listOf(LanguageId.KOTLIN, LanguageId.JAVA),
+                initialLanguage = LanguageId.JAVA,
+                nameHint = "Used as the source file name.",
+            ) { name, _ -> "Enter a problem name.".takeIf { name.isEmpty() } }
+
+            assertTrue(dialog.language == LanguageId.JAVA)
+            assertTrue(!dialog.isOKActionEnabled)
+
+            val component = dialog.createCenterPanel()
+            val size = Dimension(420, 120)
+            component.size = size
+            layoutTree(component)
+            val image = UIUtil.createImage(component, size.width, size.height, BufferedImage.TYPE_INT_RGB)
+            val g = image.createGraphics()
+            g.color = Color.WHITE
+            g.fillRect(0, 0, size.width, size.height)
+            component.paint(g)
+            g.dispose()
+            System.getenv("CPH_UI_SNAPSHOT_DIR")?.let { directory ->
+                File(directory).mkdirs()
+                ImageIO.write(image, "png", File(directory, "add-problem.png"))
+            }
+            Disposer.dispose(dialog.disposable)
         }
     }
 

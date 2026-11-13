@@ -2,7 +2,9 @@ package io.github.bovmelo.cph.ui
 
 import com.intellij.icons.AllIcons
 import com.intellij.ide.BrowserUtil
+import com.intellij.ide.util.PropertiesComponent
 import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ApplicationInfo
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -30,10 +32,14 @@ import com.intellij.util.ui.AsyncProcessIcon
 import com.intellij.util.ui.JBFont
 import com.intellij.util.ui.JBUI
 import io.github.bovmelo.cph.model.CphUiState
+import io.github.bovmelo.cph.model.LanguageId
 import io.github.bovmelo.cph.model.Problem
 import io.github.bovmelo.cph.model.RunPhase
 import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.project.CphProjectService
+import io.github.bovmelo.cph.project.NewProblemRequest
+import io.github.bovmelo.cph.project.NewProblemRules
+import io.github.bovmelo.cph.settings.CphSettings
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Dimension
@@ -166,6 +172,11 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
         val leftGroup = DefaultActionGroup(
             action("Stop", AllIcons.Actions.Suspend, "Stop the current run") { service.stop() }
                 .enabledWhen { service.currentState().phase != RunPhase.IDLE },
+            action(
+                "Add problem",
+                AllIcons.Actions.AddFile,
+                "Create a new problem file with the name you enter",
+            ) { promptAndAddProblem() }.enabledWhen { isIdle() },
             action("Add testcase", AllIcons.General.Add, "Add an empty testcase") { service.addTestCase() }
                 .enabledWhen { hasProblem() && isIdle() },
             action("Stress test", AllIcons.Actions.Lightning, "Compare with a brute force on generated input") {
@@ -421,6 +432,36 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
         }
     }
 
+    private fun promptAndAddProblem() {
+        val settings = service<CphSettings>().snapshot()
+        val options = NewProblemRules.optionsFor(ApplicationInfo.getInstance().build.productCode, settings.defaultLanguage)
+        service.newProblemError(options.cmakeTarget)?.let { reason ->
+            Messages.showErrorDialog(project, reason, "Add Problem")
+            return
+        }
+        // One snapshot per dialog keeps file access off the typing path; the service checks again on creation.
+        val takenNames = options.languages.associateWith { service.takenProblemNames(it, options.cmakeTarget) }
+        val properties = PropertiesComponent.getInstance()
+        val dialog = AddProblemDialog(
+            project = project,
+            languages = options.languages,
+            initialLanguage = properties.getValue(ADD_PROBLEM_LANGUAGE_KEY)?.let(LanguageId::fromSetting)
+                ?: settings.defaultLanguage,
+            nameHint = if (options.cmakeTarget) {
+                "Used as the source file name and the CMake target name."
+            } else {
+                "Used as the source file name."
+            },
+        ) { name, language ->
+            NewProblemRules.nameError(NewProblemRequest(name, language, options.cmakeTarget), takenNames.getValue(language))
+        }
+        if (!dialog.showAndGet()) {
+            return
+        }
+        properties.setValue(ADD_PROBLEM_LANGUAGE_KEY, dialog.language.settingValue)
+        service.addProblem(NewProblemRequest(dialog.problemName, dialog.language, options.cmakeTarget))
+    }
+
     private fun chooseImportFile() {
         val selected = FileChooser.chooseFile(
             FileChooserDescriptorFactory.createSingleFileDescriptor("json").withTitle("Import CPH Testcases"),
@@ -508,6 +549,7 @@ class CphToolWindowPanel(private val project: Project) : JPanel(BorderLayout()),
     private companion object {
         const val LIST_CARD = "list"
         const val EMPTY_CARD = "empty"
+        const val ADD_PROBLEM_LANGUAGE_KEY = "cph.addProblem.language"
         const val CREATE_BUTTON_KEY = "cph.createButton"
     }
 }
