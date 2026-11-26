@@ -199,6 +199,49 @@ class JudgeEngineTest {
         assertEquals("not a valid candidate", callbacks.result(31)?.checkerStderr)
     }
 
+    @Test
+    fun `a new executable has its first launch before any testcase is timed`() {
+        val executor = BuildExecutor(compile = ProcessResult("", "", 0, 900))
+        val callbacks = RecordingCallbacks()
+        val engine = JudgeEngine(executor)
+
+        engine.run(engine.prepareRun(), compiledProblem(), null, CphSettingsSnapshot(), callbacks)
+
+        assertEquals(listOf("compile", "first launch", "run", "run"), executor.events)
+        assertEquals(setOf(executor.firstLaunch), executor.runs.toSet())
+        assertEquals(listOf(Verdict.ACCEPTED, Verdict.ACCEPTED), callbacks.finalVerdicts())
+        assertEquals(listOf(1L, 1L), listOf(callbacks.result(1)?.durationMs, callbacks.result(2)?.durationMs))
+    }
+
+    @Test
+    fun `an interpreted solution has no first launch to absorb`() {
+        val executor = BuildExecutor(compile = ProcessResult("", "", 0, 900))
+        val engine = JudgeEngine(executor)
+
+        engine.run(engine.prepareRun(), problem(), null, CphSettingsSnapshot(), RecordingCallbacks())
+
+        assertEquals(listOf("run", "run"), executor.events)
+    }
+
+    @Test
+    fun `a failed compilation charges no time to the testcases`() {
+        val executor = BuildExecutor(compile = ProcessResult("", "solution.cpp:1:1: error", 1, 900))
+        val callbacks = RecordingCallbacks()
+        val engine = JudgeEngine(executor)
+
+        engine.run(engine.prepareRun(), compiledProblem(), null, CphSettingsSnapshot(), callbacks)
+
+        assertEquals(listOf("compile"), executor.events)
+        assertEquals(listOf(Verdict.COMPILATION_ERROR, Verdict.COMPILATION_ERROR), callbacks.finalVerdicts())
+        assertEquals(listOf(0L, 0L), listOf(callbacks.result(1)?.durationMs, callbacks.result(2)?.durationMs))
+    }
+
+    private fun compiledProblem(): Problem {
+        val source = temporaryDirectory.resolve("solution.cpp")
+        Files.writeString(source, "int main() {}")
+        return problem().copy(sourcePath = source.toString())
+    }
+
     private fun problem(): Problem {
         val source = temporaryDirectory.resolve("solution.py")
         Files.writeString(source, "print('ok')")
@@ -224,6 +267,36 @@ class JudgeEngineTest {
         ): ProcessResult {
             runCount += 1
             return ProcessResult(stdout = "ok\n", stderr = "", exitCode = 0, durationMs = 1)
+        }
+
+        override fun cancel() = Unit
+    }
+
+    /** Stands in for a compiler and the program it builds, recording the order in which the engine uses them. */
+    private class BuildExecutor(private val compile: ProcessResult) : ProcessExecutor {
+        private val compiler = CphSettingsSnapshot().toolchain(LanguageId.CPP).compileCommand
+        val events = mutableListOf<String>()
+        val runs = mutableListOf<CommandSpec>()
+        var firstLaunch: CommandSpec? = null
+
+        override fun run(
+            command: CommandSpec,
+            stdin: String,
+            timeoutMs: Long,
+            cancellationRequested: () -> Boolean,
+        ): ProcessResult {
+            if (command.executable == compiler) {
+                events += "compile"
+                return compile
+            }
+            events += "run"
+            runs += command
+            return ProcessResult(stdout = "ok\n", stderr = "", exitCode = 0, durationMs = 1)
+        }
+
+        override fun primeFirstLaunch(command: CommandSpec, cancellationRequested: () -> Boolean) {
+            events += "first launch"
+            firstLaunch = command
         }
 
         override fun cancel() = Unit

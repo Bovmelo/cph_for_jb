@@ -12,7 +12,7 @@ Kotlin 是默认语言和一等支持语言。插件只依赖 IntelliJ Platform�
 - 将题目元数据保存为兼容 CPH 的 `.cph/.<source>_<md5>.prob` 文件。
 - 每次运行只编译一次，随后顺序执行用例；支持编译错误、运行错误、stderr 策略、超时、输出上限和取消。
 - 按 CPH 规则忽略每行首尾空白，并展示逐行输出差异。
-- 每个用例同时显示耗时和峰值内存（Linux 读取 `VmHWM`，macOS 读取 `proc_pid_rusage` 的峰值物理内存，Windows 读取 `PeakWorkingSetSize`；读取失败时只显示耗时）。注意 JVM 语言的内存包含 JVM 自身的基础开销。
+- 每个用例同时显示耗时和峰值内存（Linux 读取 `VmHWM`，macOS 读取 `proc_pid_rusage` 的峰值物理内存，Windows 读取 `PeakWorkingSetSize`；读取失败时只显示耗时）。注意 JVM 语言的内存包含 JVM 自身的基础开销。 耗时只统计程序本身的运行，不含编译；macOS 首次启动新编译的可执行文件时会有几百毫秒的系统检查，插件会在计时开始前先让这次检查完成（不会执行你的程序），所以它不会算进第一个用例。
 - 判题结果为 Wrong Answer 时可点击 **Set Expected**，把本次输出直接设为预期输出。
 - 用例的 Input 可以改为选择一个文件：界面只显示文件路径，运行时以流的方式交给程序的 stdin，不读入内存，也没有大小限制。使用输入文件的用例不能导出为 JSON。
 - 每个用例可单独启用/禁用：禁用的用例会被 Run Testcases 跳过，但仍可单独运行。

@@ -22,6 +22,7 @@ These instructions apply to the entire repository.
 - Keep core parsing, persistence, command construction, and judging logic independent of IntelliJ UI APIs where practical so it can be unit tested directly.
 - Depend only on `com.intellij.modules.platform` unless a task explicitly requires product-specific APIs; language execution is compiler-command based rather than PSI based.
 - Bind local HTTP listeners to the loopback interface, validate untrusted payloads, and pass process arguments as arrays rather than shell command strings.
+- Testcase time is the program's own running time. Code that builds a program and then times it must first pass `ExecutionPlan.builtExecutable` to `ProcessExecutor.primeFirstLaunch`: macOS holds back the first launch of a new executable by hundreds of milliseconds.
 - Prefer small, cohesive classes and explicit dependencies. Add comments for intent or non-obvious constraints, not to restate the code.
 
 ## Project layout

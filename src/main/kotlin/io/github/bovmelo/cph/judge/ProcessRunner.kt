@@ -42,11 +42,19 @@ interface ProcessExecutor {
         cancellationRequested: () -> Boolean,
     ): ProcessResult = run(command, Files.readString(inputFile, StandardCharsets.UTF_8), timeoutMs, cancellationRequested)
 
+    /**
+     * Called once for an executable that was just built, before its timed runs, so that whatever the system
+     * does on the first launch of a new file is not charged to the first run. The default does nothing, which
+     * suits fakes.
+     */
+    fun primeFirstLaunch(command: CommandSpec, cancellationRequested: () -> Boolean) = Unit
+
     fun cancel()
 }
 
 class ProcessRunner(
     private val memoryReader: ProcessMemoryReader? = ProcessMemoryReaders.forCurrentOs(),
+    private val firstLaunchPrimer: FirstLaunchPrimer? = FirstLaunchPrimers.forCurrentOs(),
 ) : ProcessExecutor {
     private val activeHandler = AtomicReference<OSProcessHandler?>()
 
@@ -64,6 +72,11 @@ class ProcessRunner(
         cancellationRequested: () -> Boolean,
     ): ProcessResult = execute(command, timeoutMs, cancellationRequested) { output ->
         Files.newInputStream(inputFile).use { it.copyTo(output) }
+    }
+
+    override fun primeFirstLaunch(command: CommandSpec, cancellationRequested: () -> Boolean) {
+        val executable = runCatching { Path.of(command.executable) }.getOrNull() ?: return
+        firstLaunchPrimer?.prime(executable, cancellationRequested)
     }
 
     private fun execute(

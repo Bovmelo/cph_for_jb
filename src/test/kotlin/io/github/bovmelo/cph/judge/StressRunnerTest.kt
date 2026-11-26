@@ -187,6 +187,38 @@ class StressRunnerTest {
         assertEquals("-1", failed.actualOutput.trim())
     }
 
+    @Test
+    fun `every compiled program has its first launch before the first iteration`() {
+        val sources = listOf("solution.cpp", "gen.cpp", "brute.cpp").map { name ->
+            directory.resolve(name).also { Files.writeString(it, "int main() {}") }
+        }
+        val compiler = settings.toolchain(LanguageId.CPP).compileCommand
+        val events = mutableListOf<String>()
+        val executor = object : ProcessExecutor {
+            override fun run(
+                command: CommandSpec,
+                stdin: String,
+                timeoutMs: Long,
+                cancellationRequested: () -> Boolean,
+            ): ProcessResult {
+                events += if (command.executable == compiler) "compile" else "run"
+                return ProcessResult("same\n", "", 0, 1)
+            }
+
+            override fun primeFirstLaunch(command: CommandSpec, cancellationRequested: () -> Boolean) {
+                events += "first launch"
+            }
+
+            override fun cancel() = Unit
+        }
+        val engine = JudgeEngine(executor)
+
+        val outcome = engine.stress(engine.prepareRun(), StressConfig(sources[0], sources[1], sources[2], 1), settings) {}
+
+        assertEquals(StressOutcome.Passed(1), outcome)
+        assertEquals(List(3) { listOf("compile", "first launch") }.flatten() + List(3) { "run" }, events)
+    }
+
     private fun config(iterations: Int): StressConfig {
         val files = listOf("solution.py", "gen.py", "brute.py").map { name ->
             directory.resolve(name).also { if (!Files.exists(it)) Files.writeString(it, "pass") }

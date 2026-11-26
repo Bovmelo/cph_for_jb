@@ -113,6 +113,8 @@ class StressRunner(private val processRunner: ProcessExecutor) {
                 "Could not compile the $label: ${output.ifBlank { "compiler failed" }}"
             }
         }
+        // Otherwise the first iteration could time out on the first launch of the new programs alone.
+        plan.builtExecutable(buildDirectory)?.let { processRunner.primeFirstLaunch(it, run::isCancellationRequested) }
         plan.run
     }
 

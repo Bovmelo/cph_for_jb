@@ -10,6 +10,7 @@ import io.github.bovmelo.cph.model.TestRunResult
 import io.github.bovmelo.cph.model.Verdict
 import io.github.bovmelo.cph.settings.CphSettingsSnapshot
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
@@ -17,6 +18,9 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class LanguageExecutionIntegrationTest {
     @TempDir
@@ -69,6 +73,39 @@ class LanguageExecutionIntegrationTest {
         engine.run(engine.prepareRun(), problem, null, settings, callbacks)
 
         assertEquals(Verdict.ACCEPTED, callbacks.result?.verdict, callbacks.status)
+    }
+
+    @Test
+    fun `the first launch of a new macOS executable is absorbed without running the program`() {
+        assumeTrue(System.getProperty("os.name").startsWith("Mac"), "only macOS holds back a first launch")
+        val settings = installedSettings(LanguageId.CPP)
+        val source = temporaryDirectory.resolve("solution.cpp")
+        // Both a static initializer and main leave a trace, so any of the program's code running is noticed.
+        Files.writeString(
+            source,
+            """
+                #include <cstdio>
+                static void mark(const char* what) {
+                    if (FILE* file = std::fopen("ran.txt", "a")) { std::fputs(what, file); std::fclose(file); }
+                }
+                static struct Init { Init() { mark("init\n"); } } init;
+                int main() { mark("main\n"); std::puts("ok"); }
+            """.trimIndent(),
+        )
+        val trace = temporaryDirectory.resolve("ran.txt")
+        val buildDirectory = Files.createDirectory(temporaryDirectory.resolve("build"))
+        val plan = CppLanguageAdapter.plan(source, buildDirectory, settings)
+        val runner = ProcessRunner()
+        val compiled = runner.run(assertNotNull(plan.compile), "", settings.compileTimeoutMs) { false }
+        assertEquals(0, compiled.exitCode, compiled.stderr)
+        val executable = Path.of(assertNotNull(plan.builtExecutable(buildDirectory)).executable)
+
+        assertTrue(MacOsFirstLaunchPrimer.prime(executable) { false }, "the first launch never settled")
+        assertFalse(Files.exists(trace), "priming ran the program")
+
+        val result = runner.run(plan.run, "", settings.timeoutMs) { false }
+        assertEquals("ok\n", result.stdout)
+        assertEquals("init\nmain\n", Files.readString(trace))
     }
 
     private fun installedSettings(language: LanguageId): CphSettingsSnapshot {

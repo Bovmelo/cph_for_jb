@@ -157,13 +157,13 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
                         compileResult.outputLimitExceeded -> "Compiler output exceeded the 4 MiB capture limit."
                         else -> "Compilation failed."
                     }
+                    // No duration: the compiler's time is not a testcase's running time.
                     cases.forEach {
                         callbacks.onResult(
                             it.result(
                                 verdict = Verdict.COMPILATION_ERROR,
                                 stderr = compileOutput.ifBlank { message },
                                 exitCode = compileResult.exitCode,
-                                durationMs = compileResult.durationMs,
                             ),
                         )
                     }
@@ -171,6 +171,8 @@ class JudgeEngine(private val processRunner: ProcessExecutor = ProcessRunner()) 
                     return
                 }
             }
+            // Still part of building: the first testcase must not pay for the first launch of the new program.
+            plan.builtExecutable(buildDirectory)?.let { processRunner.primeFirstLaunch(it, run::isCancellationRequested) }
 
             for ((index, testCase) in cases.withIndex()) {
                 if (run.isCancellationRequested()) {

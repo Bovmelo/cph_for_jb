@@ -123,6 +123,18 @@ class ProcessRunnerTest {
     }
 
     @Test
+    fun `a first launch goes to the primer, and is skipped where there is none`() {
+        val primed = mutableListOf<Path>()
+        val primer = FirstLaunchPrimer { executable, _ -> primed.add(executable) }
+        val built = CommandSpec("/tmp/cph-build/solution", emptyList(), temporaryDirectory)
+
+        ProcessRunner(memoryReader = null, firstLaunchPrimer = primer).primeFirstLaunch(built) { false }
+        ProcessRunner(memoryReader = null, firstLaunchPrimer = null).primeFirstLaunch(built) { false }
+
+        assertEquals(listOf(Path.of("/tmp/cph-build/solution")), primed)
+    }
+
+    @Test
     fun `cancels an active process tree`() {
         val runner = ProcessRunner()
         val cancellation = AtomicBoolean(false)
